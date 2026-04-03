@@ -7,6 +7,11 @@
 
 set -e
 
+# ── Config ────────────────────────────────────────────────────────────────────
+HIDE_PANE_BORDER=0        # 1 = invisible border, 0 = default tmux border
+BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDER=1)
+# ─────────────────────────────────────────────────────────────────────────────
+
 SESSION="${1:-surf}"
 START_DIR="${2:-$PWD}"
 SURF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,8 +40,13 @@ tmux new-session -d -s "$SESSION" \
     -x "$TERM_COLS" -y "$TERM_LINES" \
     -c "$START_DIR"
 tmux set -t "$SESSION" status off
-tmux set -t "$SESSION" pane-border-style fg=default
-tmux set -t "$SESSION" pane-active-border-style fg=default
+if [[ "$HIDE_PANE_BORDER" == 1 ]]; then
+    tmux set -t "$SESSION" pane-border-style "fg=${BORDER_BG}"
+    tmux set -t "$SESSION" pane-active-border-style "fg=${BORDER_BG}"
+else
+    tmux set -t "$SESSION" pane-border-style fg=default
+    tmux set -t "$SESSION" pane-active-border-style fg=default
+fi
 
 # Split off bottom 30 % (git log)
 tmux split-window -v -l "$BOT_LINES" -t "${SESSION}:0.0" -c "$START_DIR"
