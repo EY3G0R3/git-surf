@@ -34,6 +34,7 @@ GIT_LOG_LINES=$(( BOT_LINES - 2 ))
 tmux new-session -d -s "$SESSION" \
     -x "$TERM_COLS" -y "$TERM_LINES" \
     -c "$START_DIR"
+tmux set -t "$SESSION" status off
 
 # Split off bottom 30 % (git log)
 tmux split-window -v -l "$BOT_LINES" -t "${SESSION}:0.0" -c "$START_DIR"
