@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# surf — launch the git-surf tmux layout
+#
+# Usage: surf [session-name] [start-dir]
+#   session-name  defaults to "surf"
+#   start-dir     defaults to $PWD
+
+set -e
+
+SESSION="${1:-surf}"
+START_DIR="${2:-$PWD}"
+SURF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── If session already exists and is healthy (2 panes), just attach ───────
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    pane_count=$(tmux list-panes -t "${SESSION}:0" 2>/dev/null | wc -l)
+    if [[ "$pane_count" -ge 2 ]]; then
+        exec tmux attach-session -t "$SESSION"
+    else
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
+    fi
+fi
+
+TERM_LINES=$(tput lines 2>/dev/null || true)
+TERM_COLS=$(tput cols 2>/dev/null || true)
+[[ ${TERM_LINES:-0} -lt 10 ]] && TERM_LINES=24
+[[ ${TERM_COLS:-0}  -lt 20 ]] && TERM_COLS=80
+BOT_LINES=$(( TERM_LINES * 30 / 100 ))
+[[ $BOT_LINES -lt 5 ]] && BOT_LINES=5
+GIT_LOG_LINES=$(( BOT_LINES - 2 ))
+[[ $GIT_LOG_LINES -lt 3 ]] && GIT_LOG_LINES=3
+
+# ── Create session + split ─────────────────────────────────────────────────
+tmux new-session -d -s "$SESSION" \
+    -x "$TERM_COLS" -y "$TERM_LINES" \
+    -c "$START_DIR"
+
+# Split off bottom 30 % (git log)
+tmux split-window -v -l "$BOT_LINES" -t "${SESSION}:0.0" -c "$START_DIR"
+
+# Layout:
+#   0.0  main shell  (~70 %) — normal interactive zsh, input + output
+#   0.1  bot git log ( 30 %)
+
+MAIN_PANE=$(tmux display-message -t "${SESSION}:0.0" -p "#{pane_id}")
+BOT_PANE=$(tmux display-message  -t "${SESSION}:0.1" -p "#{pane_id}")
+
+# ── Publish shared state into session environment ─────────────────────────
+tmux set-environment -t "$SESSION" SURF_MAIN_PANE "$MAIN_PANE"
+tmux set-environment -t "$SESSION" SURF_BOT_PANE  "$BOT_PANE"
+tmux set-environment -t "$SESSION" SURF_SESSION   "$SESSION"
+tmux set-environment -t "$SESSION" SURF_DIR       "$SURF_DIR"
+tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
+tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
+
+# ── Bootstrap each pane by sourcing a generated script ────────────────────
+_launch_pane() {
+    local pane="$1"
+    local role="$2"
+
+    local bootstrap
+    bootstrap=$(mktemp -t "surf-${role}-XXXXXX.zsh")
+
+    cat > "$bootstrap" <<RCEOF
+export SURF_MAIN_PANE="$MAIN_PANE"
+export SURF_BOT_PANE="$BOT_PANE"
+export SURF_SESSION="$SESSION"
+export SURF_DIR="$SURF_DIR"
+export SURF_GIT_LINES="$GIT_LOG_LINES"
+export SURF_PWD="$START_DIR"
+export SURF_ROLE="$role"
+export SURF_SOURCED=1
+source "$SURF_DIR/zsh/surf-${role}.zsh"
+RCEOF
+
+    tmux send-keys -t "$pane" \
+        "source $(printf '%q' "$bootstrap")" \
+        Enter
+}
+
+_launch_pane "$MAIN_PANE" main
+_launch_pane "$BOT_PANE"  bot
+
+# ── Focus main pane and attach ────────────────────────────────────────────
+tmux select-pane -t "$MAIN_PANE"
+exec tmux attach-session -t "$SESSION"
