@@ -1,21 +1,19 @@
-# surf-bot.ps1 — bottom pane (30 %): live git log viewer
+# surf-bot.ps1 — bottom pane (~30 %): live git log
 #
 # Redraws the git log when pwd.txt changes or refresh.flag is written.
-# refresh.flag is created by the top pane after each command completes,
-# so there are no timer-driven redraws (and no blinking).
+# refresh.flag is created by surf-main.ps1 after each command completes,
+# so there are no timer-driven redraws — mirrors surf-bot.zsh behaviour.
 
 param(
     [string]$StateDir,
     [string]$StartDir
 )
 
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $PwdFile     = Join-Path $StateDir "pwd.txt"
 $RefreshFile = Join-Path $StateDir "refresh.flag"
-$MaxLines    = $Host.UI.RawUI.WindowSize.Height - 2
-if ($MaxLines -lt 5) { $MaxLines = 5 }
 
 [Console]::CursorVisible = $false
-# Restore cursor on exit
 $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
     [Console]::CursorVisible = $true
 }
@@ -23,13 +21,18 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
 function Draw-GitLog {
     param([string]$Dir)
 
-    # Move to top-left of this pane's virtual screen and clear
+    # Query actual pane size each draw so resizes are handled correctly
+    $rows = $Host.UI.RawUI.WindowSize.Height
+    $cols = $Host.UI.RawUI.WindowSize.Width
+    if ($rows -lt 5) { $rows = 5 }
+    $rows--   # leave one line at the bottom to avoid scroll
+
+    # Clear pane without flicker
     [Console]::SetCursorPosition(0, 0)
-    # Clear screen without flicker: overwrite each line
-    $blank = ' ' * $Host.UI.RawUI.WindowSize.Width
-    for ($i = 0; $i -lt $Host.UI.RawUI.WindowSize.Height; $i++) {
+    $blank = ' ' * $cols
+    for ($i = 0; $i -lt ($rows + 1); $i++) {
         [Console]::SetCursorPosition(0, $i)
-        Write-Host $blank -NoNewline
+        [Console]::Write($blank)
     }
     [Console]::SetCursorPosition(0, 0)
 
@@ -39,20 +42,17 @@ function Draw-GitLog {
         return
     }
 
-    $lines = git -C $Dir log --oneline --graph --decorate --all -n $MaxLines --color=never 2>$null
+    $lines = git -C $Dir log --oneline --graph --decorate --all -n $rows --color=always 2>$null
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
         return
     }
 
-    # Colour the output manually (--color=always would emit ANSI codes that
-    # Write-Host can handle on modern Windows terminals, but let's keep it
-    # simple and colour entire lines based on content)
-    foreach ($l in ($lines | Select-Object -First $MaxLines)) {
-        if     ($l -match '\*')          { Write-Host $l -ForegroundColor Cyan }
-        elseif ($l -match '\(HEAD')      { Write-Host $l -ForegroundColor Green }
-        elseif ($l -match 'origin/')     { Write-Host $l -ForegroundColor Yellow }
-        else                             { Write-Host $l -ForegroundColor Gray }
+    foreach ($l in ($lines | Select-Object -First $rows)) {
+        # Naive truncation to terminal width (ANSI codes count toward the limit,
+        # same as cut -c in the Linux version)
+        if ($l.Length -gt $cols) { $l = $l.Substring(0, $cols) }
+        [Console]::WriteLine($l)
     }
 }
 
@@ -62,7 +62,7 @@ $lastPwd = ""
 while ($true) {
     $curPwd = $StartDir
     if (Test-Path $PwdFile) {
-        $r = (Get-Content $PwdFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
+        $r = Get-Content $PwdFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($r) { $curPwd = $r.Trim() }
     }
 
