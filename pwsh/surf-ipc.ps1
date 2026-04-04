@@ -3,9 +3,8 @@
 # Sourced from $PROFILE by the hook surf.ps1 installs, but only when
 # $env:SURF_STATE_DIR is set (i.e. only inside a surf session).
 #
-# Because the profile has already finished loading before this runs,
-# the user's full environment (aliases, prompt theme, modules, …) is in
-# place.  We just layer the IPC on top.
+# Loads the Windows PowerShell profile (Documents\WindowsPowerShell\) if
+# present, so settings kept there are available even though surf runs PS7.
 #
 # Env vars are cleared immediately so nested `pwsh` processes spawned from
 # this pane don't accidentally activate as surf panes.
@@ -16,6 +15,14 @@ $_surfStartDir = $env:SURF_START_DIR
 Remove-Item Env:\SURF_STATE_DIR   -ErrorAction SilentlyContinue
 Remove-Item Env:\SURF_START_DIR   -ErrorAction SilentlyContinue
 Remove-Item Env:\SURF_SCRIPTS_DIR -ErrorAction SilentlyContinue
+
+# ── Load the Windows PowerShell profile if present ────────────────────────
+# PS7 auto-loads Documents\PowerShell\profile.ps1, but many users keep their
+# settings in Documents\WindowsPowerShell\profile.ps1 (the PS5 location).
+# Source it here so aliases, modules, and prompt themes are active.
+$_winPSProfile = Join-Path ([Environment]::GetFolderPath('MyDocuments')) `
+    'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'
+if (Test-Path -LiteralPath $_winPSProfile) { . $_winPSProfile }
 
 # ── Navigate to the surf starting directory ────────────────────────────────
 if ($_surfStartDir -and (Test-Path -LiteralPath $_surfStartDir)) {
