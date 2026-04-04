@@ -10,6 +10,10 @@
 # The user's own $PROFILE is sourced first so aliases, functions, and prompt
 # themes (oh-my-posh, starship, posh-git, …) are active.  The existing prompt
 # is captured and called from within the wrapper, so themes continue to work.
+#
+# IPC variables use $global: (not $script:) because the encoded-command's
+# script scope is destroyed once it finishes; only global scope persists into
+# the interactive REPL that follows.
 
 param(
     [string]$StateDir,
@@ -18,12 +22,15 @@ param(
 
 Set-Location $StartDir
 
-# Source the user's profile so their environment is fully set up
-if (Test-Path $PROFILE) { . $PROFILE }
+# Source the user's profiles so their environment is fully set up.
+# Load both AllHosts and CurrentHost levels, same order PowerShell uses.
+foreach ($p in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost)) {
+    if ($p -and (Test-Path -LiteralPath $p)) { . $p }
+}
 
-# ── IPC paths ─────────────────────────────────────────────────────────────
-$script:PwdFile     = Join-Path $StateDir "pwd.txt"
-$script:RefreshFile = Join-Path $StateDir "refresh.flag"
+# ── IPC paths — must be $global: so they survive past this script scope ────
+$global:_surf_PwdFile     = Join-Path $StateDir "pwd.txt"
+$global:_surf_RefreshFile = Join-Path $StateDir "refresh.flag"
 
 # ── Shared history (syncs with bot pane history path) ─────────────────────
 Set-PSReadLineOption -HistorySavePath (Join-Path $StateDir "history.txt") `
@@ -31,16 +38,16 @@ Set-PSReadLineOption -HistorySavePath (Join-Path $StateDir "history.txt") `
 
 # ── Wrap the prompt to publish state after each command ───────────────────
 # Capture whatever prompt the profile installed (or the PowerShell default).
-$script:_innerPrompt = if ($function:prompt) { $function:prompt } else { $null }
+$global:_surf_InnerPrompt = if ($function:prompt) { $function:prompt } else { $null }
 
 function global:prompt {
     # Publish PWD and signal the git-log pane to redraw
-    $PWD.Path | Set-Content $script:PwdFile     -Encoding UTF8 -Force
-    ""         | Set-Content $script:RefreshFile -Encoding UTF8 -Force
+    $PWD.Path | Set-Content $global:_surf_PwdFile     -Encoding UTF8 -Force
+    ""         | Set-Content $global:_surf_RefreshFile -Encoding UTF8 -Force
 
     # Delegate to the user's original prompt, or use a minimal fallback
-    if ($script:_innerPrompt) {
-        return (& $script:_innerPrompt)
+    if ($global:_surf_InnerPrompt) {
+        return (& $global:_surf_InnerPrompt)
     }
 
     $loc = $PWD.Path -replace [regex]::Escape($HOME), "~"
