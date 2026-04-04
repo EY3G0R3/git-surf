@@ -41,7 +41,9 @@ $env:SURF_SCRIPTS_DIR = $SurfDir
 $hookTag  = '# git-surf IPC hook'
 $hookLine = 'if ($env:SURF_STATE_DIR) { . (Join-Path $env:SURF_SCRIPTS_DIR "pwsh\surf-ipc.ps1") }'
 
-$profilePath = $PROFILE.CurrentUserCurrentHost
+# Ask the target pwsh for its own profile path — not $PROFILE here, which
+# resolves to whichever host is running surf.ps1 (VSCode, git-bash, …).
+$profilePath = & $PwshExe -NoProfile -Command '$PROFILE.CurrentUserCurrentHost'
 if (-not (Test-Path $profilePath)) {
     New-Item -ItemType File -Path $profilePath -Force | Out-Null
 }
