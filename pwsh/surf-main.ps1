@@ -43,11 +43,21 @@ Set-PSReadLineOption -HistorySavePath (Join-Path $StateDir "history.txt") `
 # ── Wrap the prompt to publish state after each command ───────────────────
 # Capture whatever prompt the profile installed (or the PowerShell default).
 $global:_surf_InnerPrompt = if ($function:prompt) { $function:prompt } else { $null }
+# -1 so the very first prompt call always seeds pwd.txt (e.g. profile changed $PWD).
+# After that, only update when Get-History shows a new entry — prevents prompt
+# frameworks (oh-my-posh, posh-git, starship) from triggering bot redraws on
+# their periodic idle-refresh calls.
+$global:_surf_LastCmdId   = -1
 
 function global:prompt {
-    # Publish PWD and signal the git-log pane to redraw
-    $PWD.Path | Set-Content $global:_surf_PwdFile     -Encoding UTF8 -Force
-    ""         | Set-Content $global:_surf_RefreshFile -Encoding UTF8 -Force
+    # Publish PWD / refresh signal only when the user ran a new command.
+    $h  = Get-History -Count 1 -ErrorAction SilentlyContinue
+    $id = if ($h) { $h.Id } else { 0 }
+    if ($id -ne $global:_surf_LastCmdId) {
+        $global:_surf_LastCmdId = $id
+        $PWD.Path | Set-Content $global:_surf_PwdFile     -Encoding UTF8 -Force
+        ""         | Set-Content $global:_surf_RefreshFile -Encoding UTF8 -Force
+    }
 
     # Delegate to the user's original prompt, or use a minimal fallback
     if ($global:_surf_InnerPrompt) {
