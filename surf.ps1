@@ -42,7 +42,10 @@ if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
 }
 
 $SurfDir = $PSScriptRoot
-$PwshExe = (Get-Command pwsh -ErrorAction Stop).Source
+# Use Windows PowerShell (powershell.exe / PS5.1) — always present on Windows
+# and resolves $PROFILE to Documents\WindowsPowerShell\, where most users keep
+# their customisations.  PS7 (pwsh) uses a different profile path and misses them.
+$PwshExe = (Get-Command powershell -ErrorAction Stop).Source
 
 # ── Per-session IPC directory ──────────────────────────────────────────────
 New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
