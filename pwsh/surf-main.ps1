@@ -22,6 +22,10 @@ param(
 
 Set-Location $StartDir
 
+# Clear surf env vars so that if the user's $PROFILE still contains the old
+# git-surf IPC hook it won't fire and double-initialize IPC.
+Remove-Item Env:\SURF_STATE_DIR, Env:\SURF_START_DIR, Env:\SURF_SCRIPTS_DIR -ErrorAction SilentlyContinue
+
 # Source the user's profiles so their environment is fully set up.
 # Load both AllHosts and CurrentHost levels, same order PowerShell uses.
 foreach ($p in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost)) {
