@@ -431,7 +431,10 @@ $lastRepoSignature = ""
 $lastTheme = ""
 
 while ($true) {
-    $curPwd = $StartDir
+    # Fall back to $lastPwd (not $StartDir) so a transient read failure while
+    # pwd.txt is being written doesn't briefly flash a stale/previous repo.
+    # First iteration: $lastPwd is "" so $StartDir is used as the seed.
+    $curPwd = if ($lastPwd) { $lastPwd } else { $StartDir }
     if (Test-Path $PwdFile) {
         $r = Get-Content $PwdFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         if ($r) { $curPwd = $r.Trim() }

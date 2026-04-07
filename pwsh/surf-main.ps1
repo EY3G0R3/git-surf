@@ -43,18 +43,20 @@ Set-PSReadLineOption -HistorySavePath (Join-Path $StateDir "history.txt") `
 # ── Wrap the prompt to publish state after each command ───────────────────
 # Capture whatever prompt the profile installed (or the PowerShell default).
 $global:_surf_InnerPrompt = if ($function:prompt) { $function:prompt } else { $null }
-# -1 so the very first prompt call always seeds pwd.txt (e.g. profile changed $PWD).
-# After that, only update when Get-History shows a new entry — prevents prompt
-# frameworks (oh-my-posh, posh-git, starship) from triggering bot redraws on
-# their periodic idle-refresh calls.
-$global:_surf_LastCmdId   = -1
+# Starts $true so the very first prompt call always seeds pwd.txt with the
+# real post-profile $PWD (profile may have changed it).  Afterwards it is
+# driven exclusively by the Enter key handler below — idle redraws by
+# oh-my-posh / posh-git / starship no longer signal the bot pane.
+$global:_surf_CmdPending  = $true
+
+Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {
+    $global:_surf_CmdPending = $true
+    [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
+}
 
 function global:prompt {
-    # Publish PWD / refresh signal only when the user ran a new command.
-    $h  = Get-History -Count 1 -ErrorAction SilentlyContinue
-    $id = if ($h) { $h.Id } else { 0 }
-    if ($id -ne $global:_surf_LastCmdId) {
-        $global:_surf_LastCmdId = $id
+    if ($global:_surf_CmdPending) {
+        $global:_surf_CmdPending = $false
         $PWD.Path | Set-Content $global:_surf_PwdFile     -Encoding UTF8 -Force
         ""         | Set-Content $global:_surf_RefreshFile -Encoding UTF8 -Force
     }
