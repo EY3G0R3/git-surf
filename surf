@@ -15,15 +15,28 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 SESSION="${1:-surf}"
 START_DIR="${2:-$PWD}"
 SURF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SURF_VERSION=$(
+    cksum "$SURF_DIR/surf" "$SURF_DIR/zsh/surf-main.zsh" "$SURF_DIR/zsh/surf-bot.zsh" \
+        | cksum \
+        | awk '{print $1}'
+)
 
 # ── If session already exists and is healthy (2 panes), just attach ───────
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     pane_count=$(tmux list-panes -t "${SESSION}:0" 2>/dev/null | wc -l)
     if [[ "$pane_count" -ge 2 ]]; then
-        exec tmux attach-session -t "$SESSION"
-    else
-        tmux kill-session -t "$SESSION" 2>/dev/null || true
+        session_dir=$(tmux show-environment -t "$SESSION" SURF_PWD 2>/dev/null \
+                      | sed 's/^SURF_PWD=//')
+        session_version=$(tmux show-environment -t "$SESSION" SURF_VERSION 2>/dev/null \
+                          | sed 's/^SURF_VERSION=//')
+        if [[ "$session_dir" == "$START_DIR" && "$session_version" == "$SURF_VERSION" ]]; then
+            exec tmux attach-session -t "$SESSION"
+        fi
     fi
+
+    # A stale session carries old code or pane state. Rebuild it instead of
+    # attaching and continuing to show an obsolete directory (commonly "/").
+    tmux kill-session -t "$SESSION" 2>/dev/null || true
 fi
 
 TERM_LINES=$(tput lines 2>/dev/null || true)
@@ -63,7 +76,9 @@ tmux set-environment -t "$SESSION" SURF_MAIN_PANE "$MAIN_PANE"
 tmux set-environment -t "$SESSION" SURF_BOT_PANE  "$BOT_PANE"
 tmux set-environment -t "$SESSION" SURF_SESSION   "$SESSION"
 tmux set-environment -t "$SESSION" SURF_DIR       "$SURF_DIR"
+tmux set-environment -t "$SESSION" SURF_VERSION   "$SURF_VERSION"
 tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
+tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
 
 # ── Bootstrap each pane by sourcing a generated script ────────────────────
@@ -71,8 +86,9 @@ _launch_pane() {
     local pane="$1"
     local role="$2"
 
-    local bootstrap
+    local bootstrap quoted_start_dir
     bootstrap=$(mktemp -t "surf-${role}-XXXXXX.zsh")
+    printf -v quoted_start_dir '%q' "$START_DIR"
 
     cat > "$bootstrap" <<RCEOF
 export SURF_MAIN_PANE="$MAIN_PANE"
@@ -80,9 +96,11 @@ export SURF_BOT_PANE="$BOT_PANE"
 export SURF_SESSION="$SESSION"
 export SURF_DIR="$SURF_DIR"
 export SURF_GIT_LINES="$GIT_LOG_LINES"
+export SURF_START_DIR="$START_DIR"
 export SURF_PWD="$START_DIR"
 export SURF_ROLE="$role"
 export SURF_SOURCED=1
+cd -- $quoted_start_dir
 source "$SURF_DIR/zsh/surf-${role}.zsh"
 RCEOF
 

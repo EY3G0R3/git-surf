@@ -9,6 +9,7 @@ setopt no_prompt_cr
 
 _surf_draw_log() {
     local dir="$1"
+    local -a log_cmd
     # Query actual pane height each draw so resizes and rounding never mismatch
     local rows cols
     rows=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_height}" 2>/dev/null)
@@ -21,12 +22,20 @@ _surf_draw_log() {
     tput cup 0 0
     tput ed
 
-    if ! git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
+    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        log_cmd=(git -C "$dir")
+    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
+         && (( $+commands[yadm] )) \
+         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
+        # yadm's work tree is $HOME, so every directory below it is covered.
+        # Prefer a regular repository above when one is nested in that tree.
+        log_cmd=(yadm)
+    else
         printf '%s\n' "$(tput setaf 3)not a git repository: $dir$(tput sgr0)"
         return
     fi
 
-    git -C "$dir" \
+    "${log_cmd[@]}" \
         log --oneline --graph --decorate --all -n "$rows" \
         --color=always \
         2>/dev/null \
@@ -45,7 +54,7 @@ while true; do
     # Read current working dir and refresh signal from tmux session env
     cur_pwd=$(tmux show-environment -t "$SURF_SESSION" SURF_PWD 2>/dev/null \
               | sed 's/^SURF_PWD=//')
-    [[ -z "$cur_pwd" ]] && cur_pwd="$HOME"
+    [[ -z "$cur_pwd" ]] && cur_pwd="${SURF_START_DIR:-$HOME}"
 
     cur_refresh=$(tmux show-environment -t "$SURF_SESSION" SURF_REFRESH 2>/dev/null \
                   | sed 's/^SURF_REFRESH=//')

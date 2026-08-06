@@ -37,12 +37,32 @@ function Draw-GitLog {
     [Console]::SetCursorPosition(0, 0)
 
     $isRepo = git -C $Dir rev-parse --is-inside-work-tree 2>$null
-    if (-not $isRepo) {
+    $useYadm = $false
+    if (-not $isRepo -and (Get-Command yadm -ErrorAction SilentlyContinue)) {
+        $homePath = [System.IO.Path]::GetFullPath($HOME).TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+        $dirPath = [System.IO.Path]::GetFullPath($Dir)
+        $underHome = $dirPath -eq $homePath -or
+            $dirPath.StartsWith($homePath + [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringComparison]::OrdinalIgnoreCase)
+        if ($underHome) {
+            $useYadm = [bool](yadm rev-parse --is-inside-work-tree 2>$null)
+        }
+    }
+
+    if (-not $isRepo -and -not $useYadm) {
         Write-Host "not a git repository: $Dir" -ForegroundColor Yellow
         return
     }
 
-    $lines = git -C $Dir log --oneline --graph --decorate --all -n $rows --color=always 2>$null
+    if ($useYadm) {
+        # yadm covers $HOME recursively. A regular nested repository still wins.
+        $lines = yadm log --oneline --graph --decorate --all -n $rows --color=always 2>$null
+    } else {
+        $lines = git -C $Dir log --oneline --graph --decorate --all -n $rows --color=always 2>$null
+    }
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
         return
