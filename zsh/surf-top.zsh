@@ -6,6 +6,8 @@ typeset -gr SURF_STATUS_CLEAN_BG=22
 typeset -gr SURF_STATUS_DIRTY_BG=58
 typeset -gr SURF_STATUS_CLEAN_FG=157
 typeset -gr SURF_STATUS_DIRTY_FG=229
+# Available layouts: split, file-centered
+typeset -gr SURF_STATUS_LAYOUT=split
 
 _surf_status_command() {
     local dir="$1"
@@ -34,81 +36,197 @@ _surf_status_branch() {
     REPLY="$branch"
 }
 
-_surf_format_status_line() {
+_surf_status_action() {
+    case "$1" in
+        M) REPLY='modified' ;;
+        A) REPLY='added' ;;
+        D) REPLY='deleted' ;;
+        R) REPLY='renamed' ;;
+        C) REPLY='copied' ;;
+        T) REPLY='type change' ;;
+        *) REPLY='' ;;
+    esac
+}
+
+_surf_parse_status_line() {
     local entry="$1"
     local code="${entry[1,2]}"
-    local path="${entry[4,-1]}"
     local index="${code[1]}" worktree="${code[2]}"
-    local label action
+    local staged='' unstaged=''
 
     case "$code" in
-        '??') label='untracked' ;;
-        *U*|'AA'|'DD') label='conflict' ;;
+        '??') unstaged='untracked' ;;
+        *U*|'AA'|'DD') staged='conflict'; unstaged='conflict' ;;
         *)
-            case "$worktree" in
-                M) action='modified' ;;
-                D) action='deleted' ;;
-                T) action='type change' ;;
-                R) action='renamed' ;;
-                C) action='copied' ;;
-                *) action='' ;;
-            esac
-
-            if [[ "$index" != ' ' && -n "$action" ]]; then
-                label="staged + $action"
-            elif [[ "$index" != ' ' ]]; then
-                case "$index" in
-                    M) label='staged modified' ;;
-                    A) label='staged added' ;;
-                    D) label='staged deleted' ;;
-                    R) label='staged renamed' ;;
-                    C) label='staged copied' ;;
-                    T) label='staged type change' ;;
-                    *) label='staged change' ;;
-                esac
-            else
-                label="${action:-modified}"
-            fi
+            _surf_status_action "$index"
+            staged="$REPLY"
+            _surf_status_action "$worktree"
+            unstaged="$REPLY"
             ;;
     esac
 
-    printf -v REPLY '%20s  %s' "$label" "$path"
+    reply=("$staged" "$unstaged" "${entry[4,-1]}")
 }
 
-_surf_color_status_label() {
+_surf_color_action() {
     local line="$1"
+    local forced_color="${2:-}"
     local label color colored
 
     case "$line" in
-        *'staged + modified  '*) label='staged + modified'; color=35 ;;
-        *'staged + deleted  '*)  label='staged + deleted';  color=35 ;;
-        *'staged + type change  '*) label='staged + type change'; color=35 ;;
-        *'staged + renamed  '*)  label='staged + renamed';  color=35 ;;
-        *'staged + copied  '*)   label='staged + copied';   color=35 ;;
-        *'staged type change  '*) label='staged type change'; color=32 ;;
-        *'staged modified  '*) label='staged modified'; color=32 ;;
-        *'staged deleted  '*)  label='staged deleted';  color=32 ;;
-        *'staged renamed  '*)  label='staged renamed';  color=32 ;;
-        *'staged copied  '*)   label='staged copied';   color=32 ;;
-        *'staged added  '*)    label='staged added';    color=32 ;;
-        *'staged change  '*)   label='staged change';   color=32 ;;
-        *'modified  '*)   label='modified';   color=33 ;;
-        *'type change  '*) label='type change'; color=33 ;;
-        *'added  '*)      label='added';      color=32 ;;
-        *'copied  '*)     label='copied';     color=32 ;;
-        *'renamed  '*)    label='renamed';    color=36 ;;
-        *'deleted  '*)    label='deleted';    color=31 ;;
-        *'untracked  '*)  label='untracked';  color=31 ;;
-        *'conflict  '*)   label='conflict';   color=31 ;;
+        *'type change'*) label='type change'; color=33 ;;
+        *'modified'*)    label='modified';    color=33 ;;
+        *'added'*)       label='added';       color=32 ;;
+        *'copied'*)      label='copied';      color=32 ;;
+        *'renamed'*)     label='renamed';     color=36 ;;
+        *'deleted'*)     label='deleted';     color=31 ;;
+        *'untracked'*)   label='untracked';   color=31 ;;
+        *'conflict'*)    label='conflict';    color=31 ;;
         *)
             REPLY="$line"
             return
             ;;
     esac
+    [[ -n "$forced_color" ]] && color="$forced_color"
 
     printf -v colored '\033[%sm%s\033[38;5;%sm' \
         "$color" "$label" "$SURF_STATUS_DIRTY_FG"
     REPLY="${line/$label/$colored}"
+}
+
+_surf_color_status_row() {
+    local line="$1"
+    local left middle right
+
+    [[ "$line" == *' │ '* ]] || {
+        REPLY="$line"
+        return
+    }
+
+    left="${line%%' │ '*}"
+    right="${line#*' │ '}"
+    if [[ "$right" == *' │ '* ]]; then
+        middle="${right%%' │ '*}"
+        right="${right#*' │ '}"
+        _surf_color_action "$left" 32
+        left="$REPLY"
+        _surf_color_action "$right"
+        right="$REPLY"
+        REPLY="$left │ $middle │ $right"
+    else
+        _surf_color_action "$left" 32
+        left="$REPLY"
+        _surf_color_action "$right"
+        right="$REPLY"
+        REPLY="$left │ $right"
+    fi
+}
+
+_surf_render_split() {
+    local cols="$1"
+    shift
+    local -a entries=("$@") staged_lines unstaged_lines rendered
+    local -a parsed
+    local entry staged unstaged path text left right
+    local -i block_width cell_width total visible desired remaining i
+
+    block_width=$cols
+    (( block_width > 110 )) && block_width=110
+    cell_width=$(( (block_width - 3) / 2 ))
+
+    for entry in "${entries[@]}"; do
+        _surf_parse_status_line "$entry"
+        parsed=("${reply[@]}")
+        staged="${parsed[1]}"
+        unstaged="${parsed[2]}"
+        path="${parsed[3]}"
+        if [[ -n "$staged" ]]; then
+            printf -v text '%11s  %s' "$staged" "$path"
+            staged_lines+=("$text")
+        fi
+        if [[ -n "$unstaged" ]]; then
+            printf -v text '%11s  %s' "$unstaged" "$path"
+            unstaged_lines+=("$text")
+        fi
+    done
+
+    total=${#staged_lines}
+    (( ${#unstaged_lines} > total )) && total=${#unstaged_lines}
+    desired=$(( total + 5 ))
+    (( desired > 10 )) && desired=10
+    visible=$(( desired - 5 ))
+
+    printf -v left '%*s' "$cell_width" 'STAGED'
+    printf -v right '%-*s' "$cell_width" 'UNSTAGED'
+    rendered+=("$left │ $right")
+
+    for (( i = 1; i <= visible; i++ )); do
+        if (( i == visible && ${#staged_lines} > visible )); then
+            remaining=$(( ${#staged_lines} - visible + 1 ))
+            left="… $remaining more staged"
+        else
+            left="${staged_lines[$i]:-}"
+        fi
+        if (( i == visible && ${#unstaged_lines} > visible )); then
+            remaining=$(( ${#unstaged_lines} - visible + 1 ))
+            right="… $remaining more unstaged"
+        else
+            right="${unstaged_lines[$i]:-}"
+        fi
+        left="${left[1,$cell_width]}"
+        right="${right[1,$cell_width]}"
+        printf -v left '%-*s' "$cell_width" "$left"
+        printf -v right '%-*s' "$cell_width" "$right"
+        rendered+=("$left │ $right")
+    done
+
+    SURF_DIRTY_HEIGHT=$desired
+    SURF_DIRTY_LINES=("${rendered[@]}")
+}
+
+_surf_render_file_centered() {
+    local cols="$1"
+    shift
+    local -a entries=("$@") rendered parsed
+    local entry staged unstaged path left middle right
+    local -i block_width status_width=11 file_width total visible desired remaining i
+
+    block_width=$cols
+    (( block_width > 110 )) && block_width=110
+    file_width=$(( block_width - status_width * 2 - 6 ))
+    (( file_width < 12 )) && file_width=12
+
+    printf -v left '%*s' "$status_width" 'STAGED'
+    printf -v middle '%-*s' "$file_width" 'FILE'
+    printf -v right '%-*s' "$status_width" 'UNSTAGED'
+    rendered+=("$left │ $middle │ $right")
+
+    total=${#entries}
+    desired=$(( total + 5 ))
+    (( desired > 10 )) && desired=10
+    visible=$(( desired - 5 ))
+
+    for (( i = 1; i <= visible; i++ )); do
+        if (( i == visible && total > visible )); then
+            remaining=$(( total - visible + 1 ))
+            printf -v middle '%-*s' "$file_width" "… $remaining more changed files"
+            printf -v left '%*s' "$status_width" ''
+            printf -v right '%-*s' "$status_width" ''
+        else
+            _surf_parse_status_line "${entries[$i]}"
+            parsed=("${reply[@]}")
+            staged="${parsed[1]}"
+            unstaged="${parsed[2]}"
+            path="${parsed[3][1,$file_width]}"
+            printf -v left '%*s' "$status_width" "$staged"
+            printf -v middle '%-*s' "$file_width" "$path"
+            printf -v right '%-*s' "$status_width" "$unstaged"
+        fi
+        rendered+=("$left │ $middle │ $right")
+    done
+
+    SURF_DIRTY_HEIGHT=$desired
+    SURF_DIRTY_LINES=("${rendered[@]}")
 }
 
 _surf_status_paint() {
@@ -138,7 +256,7 @@ _surf_status_paint() {
         fi
         line="${line[1,$cols]}"
         if (( i >= 5 )); then
-            _surf_color_status_label "$line"
+            _surf_color_status_row "$line"
             line="$REPLY"
         fi
         printf '%-*s' "$cols" "$line"
@@ -149,9 +267,8 @@ _surf_status_paint() {
 
 _surf_draw_status() {
     local dir="$1"
-    local -a reply status_lines shown lines cmd
-    local branch display_dir desired total visible remaining
-    local -i i
+    local -a reply status_lines lines cmd
+    local branch display_dir cols
 
     if [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]]; then
         display_dir="~${dir#$HOME}"
@@ -185,35 +302,28 @@ _surf_draw_status() {
         return
     fi
 
-    total=${#status_lines}
-    desired=$(( total + 4 ))
-    (( desired < 4 )) && desired=4
-    (( desired > 10 )) && desired=10
-    visible=$(( desired - 4 ))
-
-    if (( total > visible )); then
-        visible=$(( visible - 1 ))
-        shown=("${status_lines[@]:0:$visible}")
-        remaining=$(( total - visible ))
-        shown+=(" …  $remaining more changed file(s)")
-    else
-        shown=("${status_lines[@]}")
-    fi
-
-    for (( i = 1; i <= ${#shown}; i++ )); do
-        [[ "${shown[$i]}" == ' … '* ]] && continue
-        _surf_format_status_line "${shown[$i]}"
-        shown[$i]="$REPLY"
-    done
+    cols=$(tmux display-message -t "$SURF_TOP_PANE" -p '#{pane_width}' 2>/dev/null)
+    [[ -z "$cols" || "$cols" -lt 40 ]] && cols=80
+    case "$SURF_STATUS_LAYOUT" in
+        split)
+            _surf_render_split "$cols" "${status_lines[@]}"
+            ;;
+        file-centered)
+            _surf_render_file_centered "$cols" "${status_lines[@]}"
+            ;;
+        *)
+            _surf_render_split "$cols" "${status_lines[@]}"
+            ;;
+    esac
 
     lines=(
         "  $branch"
         "  $display_dir"
         ""
         "──  Working tree has changes  ──"
-        "${shown[@]}"
+        "${SURF_DIRTY_LINES[@]}"
     )
-    tmux resize-pane -t "$SURF_TOP_PANE" -y "$desired" 2>/dev/null
+    tmux resize-pane -t "$SURF_TOP_PANE" -y "$SURF_DIRTY_HEIGHT" 2>/dev/null
     _surf_status_paint "$SURF_STATUS_DIRTY_BG" "$SURF_STATUS_DIRTY_FG" \
         "${lines[@]}"
 }
