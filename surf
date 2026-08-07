@@ -2,9 +2,11 @@
 # surf — launch the git-surf tmux layout
 #
 # Usage: surf [session-name] [start-dir]
+#        surf --refresh [worktree-dir]
 #   session-name  defaults to a stable per-worktree name when
 #                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
+#   --refresh     signals an existing matching session to redraw and exits
 
 set -e
 
@@ -14,7 +16,7 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 # ─────────────────────────────────────────────────────────────────────────────
 
 START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
-if [[ -n "${1:-}" ]]; then
+if [[ "${1:-}" != --refresh && -n "${1:-}" ]]; then
     SESSION="$1"
 elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
     WORKTREE_NAME=$(basename "$START_DIR")
@@ -22,6 +24,13 @@ elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
     SESSION="surf-${WORKTREE_NAME}-${WORKTREE_ID}"
 else
     SESSION=surf
+fi
+
+if [[ "${1:-}" == --refresh ]]; then
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+        tmux set-environment -t "$SESSION" SURF_REFRESH "$(date +%s%N)"
+    fi
+    exit 0
 fi
 
 # Resolve symlink installs (for example ~/.local/bin/surf) before locating the
@@ -35,15 +44,16 @@ while [[ -L "$SURF_SOURCE" ]]; do
 done
 SURF_DIR="$(cd -P "$(dirname "$SURF_SOURCE")" && pwd)"
 SURF_VERSION=$(
-    cksum "$SURF_DIR/surf" "$SURF_DIR/zsh/surf-main.zsh" "$SURF_DIR/zsh/surf-bot.zsh" \
+    cksum "$SURF_DIR/surf" "$SURF_DIR/zsh/surf-main.zsh" \
+        "$SURF_DIR/zsh/surf-top.zsh" "$SURF_DIR/zsh/surf-bot.zsh" \
         | cksum \
         | awk '{print $1}'
 )
 
-# ── If session already exists and is healthy (2 panes), just attach ───────
+# ── If session already exists and is healthy (3 panes), just attach ───────
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     pane_count=$(tmux list-panes -t "${SESSION}:0" 2>/dev/null | wc -l)
-    if [[ "$pane_count" -ge 2 ]]; then
+    if [[ "$pane_count" -eq 3 ]]; then
         session_dir=$(tmux show-environment -t "$SESSION" SURF_PWD 2>/dev/null \
                       | sed 's/^SURF_PWD=//')
         session_version=$(tmux show-environment -t "$SESSION" SURF_VERSION 2>/dev/null \
@@ -66,6 +76,7 @@ BOT_LINES=$(( TERM_LINES * 30 / 100 ))
 [[ $BOT_LINES -lt 5 ]] && BOT_LINES=5
 GIT_LOG_LINES=$(( BOT_LINES - 2 ))
 [[ $GIT_LOG_LINES -lt 3 ]] && GIT_LOG_LINES=3
+TOP_LINES=2
 
 # ── Create session + split ─────────────────────────────────────────────────
 tmux new-session -d -s "$SESSION" \
@@ -80,18 +91,25 @@ else
     tmux set -t "$SESSION" pane-active-border-style fg=default
 fi
 
-# Split off bottom 30 % (git log)
-tmux split-window -v -l "$BOT_LINES" -t "${SESSION}:0.0" -c "$START_DIR"
+# Capture the original pane before splitting so pane-index renumbering cannot
+# change which shell becomes the interactive main pane.
+MAIN_PANE=$(tmux display-message -t "${SESSION}:0.0" -p "#{pane_id}")
+
+# Split off bottom 30 % (git log), then a small status pane above the main
+# shell. The status process resizes itself between 2 and 10 rows as needed.
+BOT_PANE=$(tmux split-window -v -l "$BOT_LINES" -t "$MAIN_PANE" \
+    -c "$START_DIR" -P -F "#{pane_id}")
+TOP_PANE=$(tmux split-window -v -b -l "$TOP_LINES" -t "$MAIN_PANE" \
+    -c "$START_DIR" -P -F "#{pane_id}")
 
 # Layout:
-#   0.0  main shell  (~70 %) — normal interactive zsh, input + output
-#   0.1  bot git log ( 30 %)
-
-MAIN_PANE=$(tmux display-message -t "${SESSION}:0.0" -p "#{pane_id}")
-BOT_PANE=$(tmux display-message  -t "${SESSION}:0.1" -p "#{pane_id}")
+#   top   worktree status (2–10 rows)
+#   main  normal interactive zsh (remaining space)
+#   bot   git log (~30 %)
 
 # ── Publish shared state into session environment ─────────────────────────
 tmux set-environment -t "$SESSION" SURF_MAIN_PANE "$MAIN_PANE"
+tmux set-environment -t "$SESSION" SURF_TOP_PANE  "$TOP_PANE"
 tmux set-environment -t "$SESSION" SURF_BOT_PANE  "$BOT_PANE"
 tmux set-environment -t "$SESSION" SURF_SESSION   "$SESSION"
 tmux set-environment -t "$SESSION" SURF_DIR       "$SURF_DIR"
@@ -111,6 +129,7 @@ _launch_pane() {
 
     cat > "$bootstrap" <<RCEOF
 export SURF_MAIN_PANE="$MAIN_PANE"
+export SURF_TOP_PANE="$TOP_PANE"
 export SURF_BOT_PANE="$BOT_PANE"
 export SURF_SESSION="$SESSION"
 export SURF_DIR="$SURF_DIR"
@@ -129,6 +148,7 @@ RCEOF
 }
 
 _launch_pane "$MAIN_PANE" main
+_launch_pane "$TOP_PANE"  top
 _launch_pane "$BOT_PANE"  bot
 
 # ── Focus main pane and attach ────────────────────────────────────────────
