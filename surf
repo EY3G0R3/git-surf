@@ -3,7 +3,7 @@
 #
 # Usage: surf [session-name] [start-dir]
 #   session-name  defaults to "surf"
-#   start-dir     defaults to $PWD
+#   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 
 set -e
 
@@ -13,7 +13,7 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 # ─────────────────────────────────────────────────────────────────────────────
 
 SESSION="${1:-surf}"
-START_DIR="${2:-$PWD}"
+START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
 SURF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SURF_VERSION=$(
     cksum "$SURF_DIR/surf" "$SURF_DIR/zsh/surf-main.zsh" "$SURF_DIR/zsh/surf-bot.zsh" \
