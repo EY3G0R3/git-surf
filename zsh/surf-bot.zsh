@@ -7,13 +7,43 @@
 # No interactive prompt needed
 setopt no_prompt_cr
 
+_surf_truncate_ansi() {
+    local input="$1"
+    local limit="$2"
+    local output='' sequence='' char
+    local -i index=1 visible=0 length=${#input}
+
+    while (( index <= length && visible < limit )); do
+        char="${input[$index]}"
+        if [[ "$char" == $'\033' && "${input[$(( index + 1 ))]}" == '[' ]]; then
+            sequence="$char"
+            (( index += 1 ))
+            while (( index <= length )); do
+                char="${input[$index]}"
+                sequence+="$char"
+                (( index += 1 ))
+                [[ "$char" == [@-~] ]] && break
+            done
+            output+="$sequence"
+            sequence=''
+            continue
+        fi
+
+        output+="$char"
+        (( visible += 1 ))
+        (( index += 1 ))
+    done
+
+    REPLY="$output"$'\033[0m'
+}
+
 _surf_draw_log() {
     local dir="$1"
     local -a log_cmd
     # Query actual pane height each draw so resizes and rounding never mismatch
     local rows cols
     rows=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_height}" 2>/dev/null)
-    cols=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_width}"  2>/dev/null)
+    cols=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_width}" 2>/dev/null)
     [[ -z "$rows" || "$rows" -lt 2 ]] && rows="${SURF_GIT_LINES:-10}"
     [[ -z "$cols" || "$cols" -lt 10 ]] && cols=80
     (( rows-- ))   # leave one line at the bottom to avoid scroll
@@ -40,7 +70,10 @@ _surf_draw_log() {
         --color=always \
         2>/dev/null \
     | head -n "$rows" \
-    | cut -c1-"$cols"
+    | while IFS= read -r line; do
+        _surf_truncate_ansi "$line" "$cols"
+        printf '%s\n' "$REPLY"
+      done
 }
 
 # ── Main refresh loop ─────────────────────────────────────────────────────
