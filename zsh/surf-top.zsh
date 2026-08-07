@@ -127,12 +127,14 @@ _surf_render_split() {
     shift
     local -a entries=("$@") staged_lines unstaged_lines rendered
     local -a parsed
-    local entry staged unstaged path text left right
-    local -i block_width cell_width total visible desired remaining i
+    local entry staged unstaged path text left right rule
+    local -i block_width cell_width path_width total visible desired remaining i
 
     block_width=$cols
     (( block_width > 110 )) && block_width=110
     cell_width=$(( (block_width - 3) / 2 ))
+    path_width=$(( cell_width - 13 ))
+    (( path_width < 1 )) && path_width=1
 
     for entry in "${entries[@]}"; do
         _surf_parse_status_line "$entry"
@@ -141,11 +143,11 @@ _surf_render_split() {
         unstaged="${parsed[2]}"
         path="${parsed[3]}"
         if [[ -n "$staged" ]]; then
-            printf -v text '%11s  %s' "$staged" "$path"
+            printf -v text '%s  %s' "${path[1,$path_width]}" "$staged"
             staged_lines+=("$text")
         fi
         if [[ -n "$unstaged" ]]; then
-            printf -v text '%11s  %s' "$unstaged" "$path"
+            printf -v text '%11s  %s' "$unstaged" "${path[1,$path_width]}"
             unstaged_lines+=("$text")
         fi
     done
@@ -156,9 +158,11 @@ _surf_render_split() {
     (( desired > 10 )) && desired=10
     visible=$(( desired - 5 ))
 
-    printf -v left '%*s' "$cell_width" 'STAGED'
-    printf -v right '%-*s' "$cell_width" 'UNSTAGED'
+    printf -v left '%*s' "$cell_width" 'STAGED CHANGES'
+    printf -v right '%-*s' "$cell_width" 'UNSTAGED CHANGES'
     rendered+=("$left │ $right")
+    rule="${(l:$cell_width::─:)}─┼─${(l:$cell_width::─:)}"
+    rendered+=("$rule")
 
     for (( i = 1; i <= visible; i++ )); do
         if (( i == visible && ${#staged_lines} > visible )); then
@@ -175,7 +179,7 @@ _surf_render_split() {
         fi
         left="${left[1,$cell_width]}"
         right="${right[1,$cell_width]}"
-        printf -v left '%-*s' "$cell_width" "$left"
+        printf -v left '%*s' "$cell_width" "$left"
         printf -v right '%-*s' "$cell_width" "$right"
         rendered+=("$left │ $right")
     done
@@ -188,18 +192,20 @@ _surf_render_file_centered() {
     local cols="$1"
     shift
     local -a entries=("$@") rendered parsed
-    local entry staged unstaged path left middle right
-    local -i block_width status_width=11 file_width total visible desired remaining i
+    local entry staged unstaged path left middle right rule
+    local -i block_width status_width=16 file_width total visible desired remaining i
 
     block_width=$cols
     (( block_width > 110 )) && block_width=110
     file_width=$(( block_width - status_width * 2 - 6 ))
     (( file_width < 12 )) && file_width=12
 
-    printf -v left '%*s' "$status_width" 'STAGED'
+    printf -v left '%*s' "$status_width" 'STAGED CHANGES'
     printf -v middle '%-*s' "$file_width" 'FILE'
-    printf -v right '%-*s' "$status_width" 'UNSTAGED'
+    printf -v right '%-*s' "$status_width" 'UNSTAGED CHANGES'
     rendered+=("$left │ $middle │ $right")
+    rule="${(l:$status_width::─:)}─┼─${(l:$file_width::─:)}─┼─${(l:$status_width::─:)}"
+    rendered+=("$rule")
 
     total=${#entries}
     desired=$(( total + 5 ))
@@ -259,7 +265,10 @@ _surf_status_paint() {
             _surf_color_status_row "$line"
             line="$REPLY"
         fi
-        printf '%-*s' "$cols" "$line"
+        # Paint the complete row first. ANSI sequences in colored labels do
+        # not consume terminal columns, but printf counts them when applying a
+        # field width and would otherwise leave the right side unpainted.
+        printf '%*s\r%s' "$cols" '' "$line"
         (( i < rows )) && printf '\n'
     done
     printf '\033[0m'
@@ -320,7 +329,6 @@ _surf_draw_status() {
         "  $branch"
         "  $display_dir"
         ""
-        "──  Working tree has changes  ──"
         "${SURF_DIRTY_LINES[@]}"
     )
     tmux resize-pane -t "$SURF_TOP_PANE" -y "$SURF_DIRTY_HEIGHT" 2>/dev/null
