@@ -112,7 +112,11 @@ _surf_color_status_row() {
         left="$REPLY"
         _surf_color_action "$right"
         right="$REPLY"
-        REPLY="$left │ $middle │ $right"
+        if [[ "$SURF_STATUS_LAYOUT" == file-centered ]]; then
+            REPLY="$left   $middle   $right"
+        else
+            REPLY="$left │ $middle │ $right"
+        fi
     else
         _surf_color_action "$left" 32
         left="$REPLY"
@@ -127,7 +131,7 @@ _surf_render_split() {
     shift
     local -a entries=("$@") staged_lines unstaged_lines rendered
     local -a parsed
-    local entry staged unstaged path text left right rule
+    local entry staged unstaged file_path text left right rule
     local -i block_width cell_width path_width total visible desired remaining i
 
     block_width=$cols
@@ -141,13 +145,13 @@ _surf_render_split() {
         parsed=("${reply[@]}")
         staged="${parsed[1]}"
         unstaged="${parsed[2]}"
-        path="${parsed[3]}"
+        file_path="${parsed[3]}"
         if [[ -n "$staged" ]]; then
-            printf -v text '%s  %s' "${path[1,$path_width]}" "$staged"
+            printf -v text '%s  %s' "${file_path[1,$path_width]}" "$staged"
             staged_lines+=("$text")
         fi
         if [[ -n "$unstaged" ]]; then
-            printf -v text '%11s  %s' "$unstaged" "${path[1,$path_width]}"
+            printf -v text '%11s  %s' "$unstaged" "${file_path[1,$path_width]}"
             unstaged_lines+=("$text")
         fi
     done
@@ -192,30 +196,34 @@ _surf_render_file_centered() {
     local cols="$1"
     shift
     local -a entries=("$@") rendered parsed
-    local entry staged unstaged path left middle right rule
-    local -i block_width status_width=16 file_width total visible desired remaining i
-
-    block_width=$cols
-    (( block_width > 110 )) && block_width=110
-    file_width=$(( block_width - status_width * 2 - 6 ))
-    (( file_width < 12 )) && file_width=12
-
-    printf -v left '%*s' "$status_width" 'STAGED CHANGES'
-    printf -v middle '%-*s' "$file_width" 'FILE'
-    printf -v right '%-*s' "$status_width" 'UNSTAGED CHANGES'
-    rendered+=("$left │ $middle │ $right")
-    rule="${(l:$status_width::─:)}─┼─${(l:$file_width::─:)}─┼─${(l:$status_width::─:)}"
-    rendered+=("$rule")
+    local entry staged unstaged file_path left middle right
+    local -i status_width=11 file_width=1 max_file_width
+    local -i total visible desired remaining padding i
 
     total=${#entries}
-    desired=$(( total + 5 ))
+    desired=$(( total + 4 ))
     (( desired > 10 )) && desired=10
-    visible=$(( desired - 5 ))
+    visible=$(( desired - 4 ))
+    max_file_width=$(( cols - status_width * 2 - 6 ))
+    (( max_file_width < 12 )) && max_file_width=12
+
+    for (( i = 1; i <= total; i++ )); do
+        _surf_parse_status_line "${entries[$i]}"
+        parsed=("${reply[@]}")
+        (( ${#parsed[3]} > file_width )) && file_width=${#parsed[3]}
+    done
+    (( file_width > max_file_width )) && file_width=$max_file_width
+
+    rendered+=("MODIFIED FILES")
 
     for (( i = 1; i <= visible; i++ )); do
         if (( i == visible && total > visible )); then
             remaining=$(( total - visible + 1 ))
-            printf -v middle '%-*s' "$file_width" "… $remaining more changed files"
+            middle="… $remaining more changed files"
+            middle="${middle[1,$file_width]}"
+            padding=$(( (file_width - ${#middle}) / 2 ))
+            printf -v middle '%*s%s' "$padding" '' "$middle"
+            printf -v middle '%-*s' "$file_width" "$middle"
             printf -v left '%*s' "$status_width" ''
             printf -v right '%-*s' "$status_width" ''
         else
@@ -223,9 +231,11 @@ _surf_render_file_centered() {
             parsed=("${reply[@]}")
             staged="${parsed[1]}"
             unstaged="${parsed[2]}"
-            path="${parsed[3][1,$file_width]}"
+            file_path="${parsed[3][1,$file_width]}"
             printf -v left '%*s' "$status_width" "$staged"
-            printf -v middle '%-*s' "$file_width" "$path"
+            padding=$(( (file_width - ${#file_path}) / 2 ))
+            printf -v middle '%*s%s' "$padding" '' "$file_path"
+            printf -v middle '%-*s' "$file_width" "$middle"
             printf -v right '%-*s' "$status_width" "$unstaged"
         fi
         rendered+=("$left │ $middle │ $right")
