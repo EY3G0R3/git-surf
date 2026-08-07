@@ -76,7 +76,7 @@ BOT_LINES=$(( TERM_LINES * 30 / 100 ))
 [[ $BOT_LINES -lt 5 ]] && BOT_LINES=5
 GIT_LOG_LINES=$(( BOT_LINES - 2 ))
 [[ $GIT_LOG_LINES -lt 3 ]] && GIT_LOG_LINES=3
-TOP_LINES=2
+TOP_LINES=4
 
 # ── Create session + split ─────────────────────────────────────────────────
 tmux new-session -d -s "$SESSION" \
@@ -96,14 +96,14 @@ fi
 MAIN_PANE=$(tmux display-message -t "${SESSION}:0.0" -p "#{pane_id}")
 
 # Split off bottom 30 % (git log), then a small status pane above the main
-# shell. The status process resizes itself between 2 and 10 rows as needed.
+# shell. The status process resizes itself between 4 and 10 rows as needed.
 BOT_PANE=$(tmux split-window -v -l "$BOT_LINES" -t "$MAIN_PANE" \
     -c "$START_DIR" -P -F "#{pane_id}")
 TOP_PANE=$(tmux split-window -v -b -l "$TOP_LINES" -t "$MAIN_PANE" \
     -c "$START_DIR" -P -F "#{pane_id}")
 
 # Layout:
-#   top   worktree status (2–10 rows)
+#   top   worktree status (4–10 rows)
 #   main  normal interactive zsh (remaining space)
 #   bot   git log (~30 %)
 
