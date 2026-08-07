@@ -30,3 +30,12 @@ _surf_main_chpwd() {
     tmux set-environment -t "$SURF_SESSION" SURF_PWD "$PWD"
 }
 add-zsh-hook chpwd _surf_main_chpwd
+
+# ── Closing the main pane closes the two companion panes ──────────────────
+_surf_main_zshexit() {
+    [[ "$TMUX_PANE" == "$SURF_MAIN_PANE" ]] || return
+
+    tmux kill-pane -t "$SURF_TOP_PANE" 2>/dev/null || true
+    tmux kill-pane -t "$SURF_BOT_PANE" 2>/dev/null || true
+}
+add-zsh-hook zshexit _surf_main_zshexit
