@@ -38,20 +38,77 @@ _surf_format_status_line() {
     local entry="$1"
     local code="${entry[1,2]}"
     local path="${entry[4,-1]}"
-    local label
+    local index="${code[1]}" worktree="${code[2]}"
+    local label action
 
     case "$code" in
         '??') label='untracked' ;;
         *U*|'AA'|'DD') label='conflict' ;;
-        R*) label='renamed' ;;
-        C*) label='copied' ;;
-        A*) label='added' ;;
-        *D*|D*) label='deleted' ;;
-        *T*|T*) label='type change' ;;
-        *) label='modified' ;;
+        *)
+            case "$worktree" in
+                M) action='modified' ;;
+                D) action='deleted' ;;
+                T) action='type change' ;;
+                R) action='renamed' ;;
+                C) action='copied' ;;
+                *) action='' ;;
+            esac
+
+            if [[ "$index" != ' ' && -n "$action" ]]; then
+                label="staged + $action"
+            elif [[ "$index" != ' ' ]]; then
+                case "$index" in
+                    M) label='staged modified' ;;
+                    A) label='staged added' ;;
+                    D) label='staged deleted' ;;
+                    R) label='staged renamed' ;;
+                    C) label='staged copied' ;;
+                    T) label='staged type change' ;;
+                    *) label='staged change' ;;
+                esac
+            else
+                label="${action:-modified}"
+            fi
+            ;;
     esac
 
-    printf -v REPLY '%11s  %s' "$label" "$path"
+    printf -v REPLY '%20s  %s' "$label" "$path"
+}
+
+_surf_color_status_label() {
+    local line="$1"
+    local label color colored
+
+    case "$line" in
+        *'staged + modified  '*) label='staged + modified'; color=35 ;;
+        *'staged + deleted  '*)  label='staged + deleted';  color=35 ;;
+        *'staged + type change  '*) label='staged + type change'; color=35 ;;
+        *'staged + renamed  '*)  label='staged + renamed';  color=35 ;;
+        *'staged + copied  '*)   label='staged + copied';   color=35 ;;
+        *'staged type change  '*) label='staged type change'; color=32 ;;
+        *'staged modified  '*) label='staged modified'; color=32 ;;
+        *'staged deleted  '*)  label='staged deleted';  color=32 ;;
+        *'staged renamed  '*)  label='staged renamed';  color=32 ;;
+        *'staged copied  '*)   label='staged copied';   color=32 ;;
+        *'staged added  '*)    label='staged added';    color=32 ;;
+        *'staged change  '*)   label='staged change';   color=32 ;;
+        *'modified  '*)   label='modified';   color=33 ;;
+        *'type change  '*) label='type change'; color=33 ;;
+        *'added  '*)      label='added';      color=32 ;;
+        *'copied  '*)     label='copied';     color=32 ;;
+        *'renamed  '*)    label='renamed';    color=36 ;;
+        *'deleted  '*)    label='deleted';    color=31 ;;
+        *'untracked  '*)  label='untracked';  color=31 ;;
+        *'conflict  '*)   label='conflict';   color=31 ;;
+        *)
+            REPLY="$line"
+            return
+            ;;
+    esac
+
+    printf -v colored '\033[%sm%s\033[38;5;%sm' \
+        "$color" "$label" "$SURF_STATUS_DIRTY_FG"
+    REPLY="${line/$label/$colored}"
 }
 
 _surf_status_paint() {
@@ -80,6 +137,10 @@ _surf_status_paint() {
             printf -v line '%*s%s' "$block_padding" '' "$line"
         fi
         line="${line[1,$cols]}"
+        if (( i >= 5 )); then
+            _surf_color_status_label "$line"
+            line="$REPLY"
+        fi
         printf '%-*s' "$cols" "$line"
         (( i < rows )) && printf '\n'
     done
