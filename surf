@@ -2,7 +2,8 @@
 # surf — launch the git-surf tmux layout
 #
 # Usage: surf [session-name] [start-dir]
-#   session-name  defaults to "surf"
+#   session-name  defaults to a stable per-worktree name when
+#                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 
 set -e
@@ -12,9 +13,27 @@ HIDE_PANE_BORDER=0        # 1 = invisible border, 0 = default tmux border
 BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDER=1)
 # ─────────────────────────────────────────────────────────────────────────────
 
-SESSION="${1:-surf}"
 START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
-SURF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -n "${1:-}" ]]; then
+    SESSION="$1"
+elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
+    WORKTREE_NAME=$(basename "$START_DIR")
+    WORKTREE_ID=$(printf '%s' "$START_DIR" | cksum | awk '{print $1}')
+    SESSION="surf-${WORKTREE_NAME}-${WORKTREE_ID}"
+else
+    SESSION=surf
+fi
+
+# Resolve symlink installs (for example ~/.local/bin/surf) before locating the
+# companion zsh scripts. readlink -f is not available on macOS, so follow the
+# chain portably and resolve relative link targets against their link directory.
+SURF_SOURCE="${BASH_SOURCE[0]}"
+while [[ -L "$SURF_SOURCE" ]]; do
+    SURF_LINK_DIR="$(cd -P "$(dirname "$SURF_SOURCE")" && pwd)"
+    SURF_SOURCE="$(readlink "$SURF_SOURCE")"
+    [[ "$SURF_SOURCE" == /* ]] || SURF_SOURCE="$SURF_LINK_DIR/$SURF_SOURCE"
+done
+SURF_DIR="$(cd -P "$(dirname "$SURF_SOURCE")" && pwd)"
 SURF_VERSION=$(
     cksum "$SURF_DIR/surf" "$SURF_DIR/zsh/surf-main.zsh" "$SURF_DIR/zsh/surf-bot.zsh" \
         | cksum \
