@@ -142,6 +142,11 @@ tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
 tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
 
+# The interactive middle pane owns the session. Closing it should not leave
+# the status and log workers behind in an otherwise unusable tab.
+tmux set-hook -t "$SESSION" pane-exited \
+    "if-shell -F '#{==:#{hook_pane},$MAIN_PANE}' 'kill-session -t $SESSION'"
+
 # ── Bootstrap each pane by sourcing a generated script ────────────────────
 _launch_pane() {
     local pane="$1"

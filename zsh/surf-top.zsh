@@ -226,6 +226,9 @@ last_refresh=''
 last_size=''
 
 while true; do
+    tmux display-message -t "$SURF_MAIN_PANE" -p '#{pane_id}' &>/dev/null \
+        || exit
+
     cur_pwd=$(tmux show-environment -t "$SURF_SESSION" SURF_PWD 2>/dev/null \
               | sed 's/^SURF_PWD=//')
     [[ -z "$cur_pwd" ]] && cur_pwd="${SURF_START_DIR:-$HOME}"

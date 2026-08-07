@@ -84,6 +84,9 @@ last_pwd=''
 last_refresh=''
 
 while true; do
+    tmux display-message -t "$SURF_MAIN_PANE" -p '#{pane_id}' &>/dev/null \
+        || exit
+
     # Read current working dir and refresh signal from tmux session env
     cur_pwd=$(tmux show-environment -t "$SURF_SESSION" SURF_PWD 2>/dev/null \
               | sed 's/^SURF_PWD=//')
