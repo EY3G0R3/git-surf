@@ -16,7 +16,11 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 # ─────────────────────────────────────────────────────────────────────────────
 
 START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
-if [[ "${1:-}" != --refresh && -n "${1:-}" ]]; then
+if [[ "${1:-}" == --refresh ]]; then
+    WORKTREE_NAME=$(basename "$START_DIR")
+    WORKTREE_ID=$(printf '%s' "$START_DIR" | cksum | awk '{print $1}')
+    SESSION="surf-${WORKTREE_NAME}-${WORKTREE_ID}"
+elif [[ -n "${1:-}" ]]; then
     SESSION="$1"
 elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
     WORKTREE_NAME=$(basename "$START_DIR")
@@ -27,8 +31,28 @@ else
 fi
 
 if [[ "${1:-}" == --refresh ]]; then
+    refreshed=0
     if tmux has-session -t "$SESSION" 2>/dev/null; then
         tmux set-environment -t "$SESSION" SURF_REFRESH "$(date +%s%N)"
+        refreshed=1
+    fi
+
+    # Custom-named and legacy sessions cannot be reconstructed from the
+    # worktree path. Find them by the start directory they published instead.
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" && "$candidate" != "$SESSION" ]] || continue
+        session_dir=$(tmux show-environment -t "$candidate" SURF_START_DIR 2>/dev/null \
+                      | sed 's/^SURF_START_DIR=//')
+        [[ "$session_dir" == "$START_DIR" ]] || continue
+        tmux set-environment -t "$candidate" SURF_REFRESH "$(date +%s%N)"
+        refreshed=1
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+
+    # Preserve refresh behavior for a non-worktree Surf session created with
+    # the historical default name.
+    if [[ "$refreshed" -eq 0 && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+       && tmux has-session -t surf 2>/dev/null; then
+        tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
     fi
     exit 0
 fi
