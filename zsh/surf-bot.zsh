@@ -16,8 +16,12 @@ _surf_truncate_ansi() {
     while (( index <= length && visible < limit )); do
         char="${input[$index]}"
         if [[ "$char" == $'\033' && "${input[$(( index + 1 ))]}" == '[' ]]; then
-            sequence="$char"
-            (( index += 1 ))
+            # Consume the CSI introducer together.  '[' is in the CSI final-byte
+            # range, so examining it in the loop below would end the sequence
+            # immediately and count its parameters (for example, "31m") as
+            # visible text.
+            sequence=$'\033['
+            (( index += 2 ))
             while (( index <= length )); do
                 char="${input[$index]}"
                 sequence+="$char"
