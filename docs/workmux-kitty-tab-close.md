@@ -65,11 +65,58 @@ worktree container became a kitty tab and the pane became a surf tmux session,
 that identity broke. Across one log, all six tmux-launched removals from the
 `work`-session era matched a target; all eight from the surf era matched none.
 
-## Workaround
+## Second symptom: orphaned sessions
 
-Run `workmux remove` and `workmux merge` from the agent pane — the bare kitty
-window in the tab — rather than from the surf pane. That path resolves the tab
-and schedules the `kitten @ close-tab`.
+Because nothing tore the surf session down either, every removal left a detached
+tmux session behind for a worktree that no longer existed. On the machine where
+this was investigated, 8 of 10 live `surf-*` sessions pointed at deleted
+worktrees. Surf's own `pane-exited` hook does not catch this: it fires when the
+main pane's process exits, and closing a kitty tab kills the *client*, leaving
+the server-side panes untouched.
+
+## The fix
+
+`surf --close <worktree-dir>` tears down both, and a workmux `pre_remove` hook
+invokes it. In `~/.config/workmux/config.yaml`:
+
+```yaml
+pre_remove:
+  - surf --close "$WM_WORKTREE_PATH"
+```
+
+Three details make this work where forcing the backend does not.
+
+**The tab is identified by a kitty user var, not a window id.** At launch —
+where the surf script is still a direct child of kitty and its
+`$KITTY_WINDOW_ID` is therefore real — surf stamps its window with
+`surf_worktree=<start-dir>`, and teardown matches
+`close-tab --match "var:surf_worktree=^<escaped-dir>$"`. The pattern is anchored
+and regex-escaped because kitty searches rather than anchors, so an unanchored
+`…/foo` would also match the tab for `…/foo-bar`. Panes cannot do this stamping
+themselves; see the section below.
+
+**Teardown is deferred until the removal completes.** `pre_remove` runs *before*
+the worktree is deleted, typically from inside the very session and tab being
+closed, so acting synchronously would kill workmux mid-removal. `surf --close`
+resolves its targets, hands them to a watcher detached onto init with `SIGHUP`
+ignored, and returns in ~0.1s. The watcher waits for the worktree directory to
+disappear — the observable end of the destructive phase, whether workmux deleted
+the directory or renamed it to a trash path — then acts. On a 60s timeout it
+does nothing, which is the right outcome when the removal aborted.
+
+**The tab closes before the sessions are killed.** The reverse order races:
+killing the session takes down the kitty window carrying the `surf_worktree`
+var, leaving `close-tab` nothing to match. A tmux session outlives its client,
+so it can still be reaped afterwards.
+
+`$KITTY_LISTEN_ON` is what makes any of this reachable from inside tmux. Unlike
+`$KITTY_WINDOW_ID` it stays correct in every pane; surf also stashes a copy in
+the session environment for callers that have no kitty in their environment at
+all.
+
+Running `workmux remove` from the agent pane — the bare kitty window — was the
+manual workaround before this existed, and still works: that path is inside
+kitty, so workmux resolves and closes the tab itself.
 
 ## Do not force the kitty backend from a surf pane
 
@@ -85,13 +132,40 @@ you are in, or identifies someone else's.
 Any real fix has to resolve the tab by working directory, not by an inherited
 window id.
 
+## Hooking it up per project
+
+A project's `.workmux.yaml` **replaces** the global hook list rather than
+extending it. quiver's `pre_remove` originally read:
+
+```yaml
+pre_remove:
+  - bun run scripts/cleanup.ts
+```
+
+which silently shadowed the global entry, so the hook never fired in the one
+repository it was needed in. Projects have to opt in explicitly, the same way
+that file's `post_create` already did:
+
+```yaml
+pre_remove:
+  - "<global>"
+  - bun run scripts/cleanup.ts
+```
+
+workmux logs the resolved count as `cleanup:running pre-remove hooks … count=N`,
+which is the quickest way to confirm `<global>` expanded.
+
+Note also that setting `pre_remove` in the global config replaces workmux's
+built-in default, which fast-deletes `node_modules` before removal. Projects
+that want both should list them together.
+
 ## Upstream fix direction
 
-workmux would need a fallback: when it is inside tmux but the tmux side has no
-window matching the worktree handle, and `$KITTY_LISTEN_ON` is reachable, query
-`kitten @ ls` and find the tab whose windows have the worktree path as their
-`cwd`. That resolution is stale-proof in a way `KITTY_WINDOW_ID` is not, and it
-is the only signal that survives the tmux boundary intact.
+Nothing above needs workmux to change, but the tidier home for it is upstream:
+when workmux is inside tmux and the tmux side has no window matching the
+worktree handle, it could fall back to `$KITTY_LISTEN_ON` and resolve the tab by
+working directory. That resolution is stale-proof in a way `KITTY_WINDOW_ID` is
+not, and it is the only signal that survives the tmux boundary intact.
 
 ## Side observation, not confirmed
 
@@ -108,3 +182,7 @@ That is consistent with the detached script being killed along with the tab it
 just closed, before reaching the `mv`. Not reproduced deliberately — recorded
 only so that "tab closed, worktree still present" is recognized as one failure
 rather than two.
+
+`surf --close` avoids the shape entirely: it waits for the removal to finish
+before touching anything, so its own survival is never a precondition for the
+worktree being cleaned up.

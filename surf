@@ -3,10 +3,14 @@
 #
 # Usage: surf [session-name] [start-dir]
 #        surf --refresh [worktree-dir]
+#        surf --close   [worktree-dir]
 #   session-name  defaults to a stable per-worktree name when
 #                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 #   --refresh     signals an existing matching session to redraw and exits
+#   --close       schedules teardown of the matching sessions and their kitty
+#                 tab, then exits immediately. Intended for a workmux
+#                 pre_remove hook; see docs/workmux-kitty-tab-close.md.
 
 set -e
 
@@ -15,38 +19,58 @@ HIDE_PANE_BORDER=0        # 1 = invisible border, 0 = default tmux border
 BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDER=1)
 # ─────────────────────────────────────────────────────────────────────────────
 
+MODE=""
+case "${1:-}" in
+    --refresh|--close) MODE="${1#--}" ;;
+esac
+
 START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
-if [[ "${1:-}" == --refresh ]]; then
-    WORKTREE_NAME=$(basename "$START_DIR")
-    WORKTREE_ID=$(printf '%s' "$START_DIR" | cksum | awk '{print $1}')
-    SESSION="surf-${WORKTREE_NAME}-${WORKTREE_ID}"
+
+# The stable session name for a worktree path.
+_surf_session_for_dir() {
+    local name id
+    name=$(basename "$1")
+    id=$(printf '%s' "$1" | cksum | awk '{print $1}')
+    printf 'surf-%s-%s' "$name" "$id"
+}
+
+# Every live session belonging to a worktree path, one per line. Custom-named
+# and legacy sessions cannot be reconstructed from the path, so they are found
+# by the start directory they published instead.
+_surf_sessions_for_dir() {
+    local dir="$1" canonical candidate session_dir
+    canonical=$(_surf_session_for_dir "$dir")
+
+    if tmux has-session -t "$canonical" 2>/dev/null; then
+        printf '%s\n' "$canonical"
+    fi
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" && "$candidate" != "$canonical" ]] || continue
+        session_dir=$(tmux show-environment -t "$candidate" SURF_START_DIR 2>/dev/null \
+                      | sed -n 's/^SURF_START_DIR=//p')
+        [[ "$session_dir" == "$dir" ]] || continue
+        printf '%s\n' "$candidate"
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+}
+
+if [[ -n "$MODE" ]]; then
+    SESSION=$(_surf_session_for_dir "$START_DIR")
 elif [[ -n "${1:-}" ]]; then
     SESSION="$1"
 elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
-    WORKTREE_NAME=$(basename "$START_DIR")
-    WORKTREE_ID=$(printf '%s' "$START_DIR" | cksum | awk '{print $1}')
-    SESSION="surf-${WORKTREE_NAME}-${WORKTREE_ID}"
+    SESSION=$(_surf_session_for_dir "$START_DIR")
 else
     SESSION=surf
 fi
 
-if [[ "${1:-}" == --refresh ]]; then
+if [[ "$MODE" == refresh ]]; then
     refreshed=0
-    if tmux has-session -t "$SESSION" 2>/dev/null; then
-        tmux set-environment -t "$SESSION" SURF_REFRESH "$(date +%s%N)"
-        refreshed=1
-    fi
-
-    # Custom-named and legacy sessions cannot be reconstructed from the
-    # worktree path. Find them by the start directory they published instead.
     while IFS= read -r candidate; do
-        [[ -n "$candidate" && "$candidate" != "$SESSION" ]] || continue
-        session_dir=$(tmux show-environment -t "$candidate" SURF_START_DIR 2>/dev/null \
-                      | sed 's/^SURF_START_DIR=//')
-        [[ "$session_dir" == "$START_DIR" ]] || continue
+        [[ -n "$candidate" ]] || continue
         tmux set-environment -t "$candidate" SURF_REFRESH "$(date +%s%N)"
         refreshed=1
-    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+    done < <(_surf_sessions_for_dir "$START_DIR")
 
     # Preserve refresh behavior for a non-worktree Surf session created with
     # the historical default name.
@@ -54,6 +78,74 @@ if [[ "${1:-}" == --refresh ]]; then
        && tmux has-session -t surf 2>/dev/null; then
         tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
     fi
+    exit 0
+fi
+
+# Quote regex metacharacters so a path can be used as a kitty match expression.
+# Without this, "…/foo" would also match the tab for "…/foo-bar", since kitty
+# searches rather than anchors.
+_surf_regex_escape() {
+    printf '%s' "$1" | sed 's/[][^$.*+?{}()|\\]/\\&/g'
+}
+
+# Runs detached, after the caller has exited. See the --close block below.
+_surf_close_deferred() {
+    local dir="$1" listen="$2" sessions="$3"
+    local waited=0 pattern candidate
+    set +e
+
+    # The worktree directory disappearing is the observable end of workmux's
+    # destructive phase, whether it deleted the directory or renamed it to a
+    # trash path first. Giving up on timeout leaves the tab and the sessions
+    # alone, which is the right outcome when the removal aborted.
+    while [[ -e "$dir" ]]; do
+        sleep 0.25
+        waited=$((waited + 1))
+        [[ "$waited" -lt 240 ]] || return 0
+    done
+
+    # Close the tab before reaping the sessions. Killing a session first would
+    # take down the kitty window carrying the surf_worktree user var, leaving
+    # close-tab nothing to match, whereas a tmux session outlives its client
+    # and can still be killed afterwards.
+    if [[ -n "$listen" ]] && command -v kitten >/dev/null 2>&1; then
+        pattern=$(_surf_regex_escape "$dir")
+        kitten @ --to "$listen" close-tab \
+            --match "var:surf_worktree=^${pattern}\$" >/dev/null 2>&1
+    fi
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        tmux kill-session -t "$candidate" >/dev/null 2>&1
+    done <<CLOSEEOF
+$sessions
+CLOSEEOF
+}
+
+if [[ "$MODE" == close ]]; then
+    # A workmux pre_remove hook runs *before* the worktree is deleted, and
+    # usually from inside the very session and tab being torn down. Closing
+    # either one synchronously would kill workmux mid-removal, so resolve the
+    # targets now, hand them to a detached watcher, and return at once.
+    CLOSE_SESSIONS=$(_surf_sessions_for_dir "$START_DIR")
+
+    # $KITTY_LISTEN_ON is correct in every pane, including panes inside tmux;
+    # only $KITTY_WINDOW_ID goes stale there. The stashed copy covers callers
+    # with no kitty in their environment at all, such as a cron-driven cleanup.
+    CLOSE_LISTEN="${KITTY_LISTEN_ON:-}"
+    if [[ -z "$CLOSE_LISTEN" && -n "$CLOSE_SESSIONS" ]]; then
+        CLOSE_LISTEN=$(tmux show-environment -t "$(printf '%s\n' "$CLOSE_SESSIONS" | head -n1)" \
+                       SURF_KITTY_LISTEN 2>/dev/null \
+                       | sed -n 's/^SURF_KITTY_LISTEN=//p')
+    fi
+
+    # Ignoring SIGHUP and backgrounding inside a subshell that exits at once
+    # orphans the watcher onto init, so it survives both the tab closing and
+    # the sessions being killed. `setsid` would be tidier but is not portable
+    # to macOS.
+    ( trap '' HUP
+      _surf_close_deferred "$START_DIR" "$CLOSE_LISTEN" "$CLOSE_SESSIONS" &
+    ) </dev/null >/dev/null 2>&1
     exit 0
 fi
 
@@ -74,6 +166,26 @@ SURF_VERSION=$(
         | awk '{print $1}'
 )
 
+# Tag the kitty window hosting this session with the worktree it belongs to,
+# so `surf --close` can find the tab later.
+#
+# This has to happen here in the launcher, which is still a direct child of
+# kitty, rather than from inside a pane. Panes are spawned by the tmux server
+# and inherit the environment the server was started with, so their
+# $KITTY_WINDOW_ID names whichever window happened to start the server and goes
+# stale the moment that window closes. Re-stamping on every launch also moves
+# the tag when a session is reattached in a different window.
+_surf_stamp_kitty() {
+    [[ -n "${KITTY_LISTEN_ON:-}" && -n "${KITTY_WINDOW_ID:-}" ]] || return 0
+    command -v kitten >/dev/null 2>&1 || return 0
+
+    kitten @ --to "$KITTY_LISTEN_ON" set-user-vars \
+        --match "id:${KITTY_WINDOW_ID}" \
+        "surf_worktree=${START_DIR}" >/dev/null 2>&1 || return 0
+    tmux set-environment -t "$SESSION" SURF_KITTY_LISTEN "$KITTY_LISTEN_ON"
+    tmux set-environment -t "$SESSION" SURF_KITTY_WINDOW "$KITTY_WINDOW_ID"
+}
+
 # ── If session already exists and is healthy (3 panes), just attach ───────
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     pane_count=$(tmux list-panes -t "${SESSION}:0" 2>/dev/null | wc -l)
@@ -83,6 +195,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
         session_version=$(tmux show-environment -t "$SESSION" SURF_VERSION 2>/dev/null \
                           | sed 's/^SURF_VERSION=//')
         if [[ "$session_dir" == "$START_DIR" && "$session_version" == "$SURF_VERSION" ]]; then
+            _surf_stamp_kitty
             exec tmux attach-session -t "$SESSION"
         fi
     fi
@@ -141,6 +254,7 @@ tmux set-environment -t "$SESSION" SURF_VERSION   "$SURF_VERSION"
 tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
 tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
+_surf_stamp_kitty
 
 # The interactive middle pane owns the session. Closing it should not leave
 # the status and log workers behind in an otherwise unusable tab.
