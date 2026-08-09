@@ -54,6 +54,95 @@ _surf_current_head_oid() {
     fi
 }
 
+_surf_current_primary_oid() {
+    local dir="$1"
+    local -a cmd
+    local configured primary_ref candidate oid=''
+    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        cmd=(git -C "$dir")
+    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
+         && (( $+commands[yadm] )) \
+         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
+        cmd=(yadm)
+    else
+        REPLY=''
+        return
+    fi
+
+    configured=$("${cmd[@]}" config --get surf.primaryBranch 2>/dev/null)
+    if [[ -n "$configured" ]]; then
+        for candidate in "refs/heads/$configured" \
+                         "refs/remotes/origin/$configured" "$configured"; do
+            oid=$("${cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
+            break
+        done
+    fi
+    if [[ -z "$oid" ]]; then
+        primary_ref=$("${cmd[@]}" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
+        if [[ -n "$primary_ref" ]]; then
+            local name="${primary_ref#refs/remotes/origin/}"
+            oid=$("${cmd[@]}" rev-parse --verify "refs/heads/$name" 2>/dev/null) \
+                || oid=$("${cmd[@]}" rev-parse --verify "$primary_ref" 2>/dev/null) \
+                || oid=''
+        fi
+    fi
+    if [[ -z "$oid" ]]; then
+        for candidate in refs/heads/main refs/heads/master \
+                         refs/remotes/origin/main refs/remotes/origin/master; do
+            oid=$("${cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
+            break
+        done
+    fi
+    REPLY="$oid"
+}
+
+_surf_repo_signature() {
+    local dir="$1"
+    local -a cmd
+    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
+        cmd=(git -C "$dir")
+    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
+         && (( $+commands[yadm] )) \
+         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
+        cmd=(yadm)
+    else
+        REPLY="not-repo:$dir"
+        return
+    fi
+
+    REPLY=$(
+        { "${cmd[@]}" rev-parse HEAD 2>/dev/null
+          "${cmd[@]}" for-each-ref \
+              --format='%(refname):%(objectname)' \
+              refs/heads refs/remotes refs/tags 2>/dev/null
+        } | cksum | awk '{print $1 ":" $2}'
+    )
+}
+
+_surf_render_config_signature() {
+    local theme="$1"
+    local name value signature="$theme"
+    local -a names=(
+        SURF_GIT_REF_STYLE
+        SURF_GIT_SEPARATOR
+        SURF_GIT_RIGHT_SEPARATOR
+        SURF_GIT_NODE
+        SURF_GIT_HEAD_NODE
+        SURF_GIT_SHOW_DATE
+        SURF_GIT_SHOW_AUTHOR
+        SURF_GIT_HIGHLIGHT_ROW
+    )
+
+    if [[ "$theme" == custom ]]; then
+        for name in "${names[@]}"; do
+            value=$(tmux show-environment -t "$SURF_SESSION" "$name" 2>/dev/null \
+                    | sed -n "s/^${name}=//p")
+            signature+=$'\n'"${name}=${value}"
+        done
+    fi
+    REPLY="$signature"
+}
+
 _surf_draw_log() {
     local dir="$1"
     local theme="${2:-adaptive-diamond}"
@@ -426,6 +515,9 @@ trap 'tput cnorm; exit' INT TERM EXIT
 last_pwd=''
 last_refresh=''
 last_head_oid=''
+last_primary_oid=''
+last_repo_signature=''
+last_render_config_signature=''
 last_theme=''
 
 while true; do
@@ -447,31 +539,51 @@ while true; do
         *) cur_theme=adaptive-diamond ;;
     esac
 
-    # Redraw only when PWD changes or a command has completed
+    # A command completion is only a prompt to inspect Git state. Avoid
+    # clearing the pane when none of the displayed refs actually changed.
     if [[ "$cur_pwd" != "$last_pwd" ]] \
        || [[ -n "$cur_refresh" && "$cur_refresh" != "$last_refresh" ]] \
        || [[ "$cur_theme" != "$last_theme" ]]; then
         _surf_current_head_oid "$cur_pwd"
         current_head_oid="$REPLY"
+        _surf_current_primary_oid "$cur_pwd"
+        current_primary_oid="$REPLY"
+        _surf_repo_signature "$cur_pwd"
+        current_repo_signature="$REPLY"
+        _surf_render_config_signature "$cur_theme"
+        current_render_config_signature="$REPLY"
+
+        should_draw=false
         pulse=none
-        case "$cur_theme" in
-            adaptive-diamond)
-                if [[ -n "$current_head_oid" && "$current_head_oid" != "$last_head_oid" ]]; then
-                    pulse=strong; pulse_delay=0.2
-                else
-                    pulse=subtle; pulse_delay=0.08
-                fi
-                ;;
-            pulse-arrow) pulse=strong; pulse_delay=0.2 ;;
-        esac
-        if [[ "$pulse" != none ]]; then
+        if [[ "$cur_pwd" != "$last_pwd" || "$cur_theme" != "$last_theme" \
+           || "$current_repo_signature" != "$last_repo_signature" \
+           || "$current_render_config_signature" != "$last_render_config_signature" ]]; then
+            should_draw=true
+        fi
+        # pulse-arrow is the deliberately animated alternative; unlike the
+        # adaptive default it continues to pulse after every command.
+        [[ "$cur_theme" == pulse-arrow && "$cur_refresh" != "$last_refresh" ]] \
+            && should_draw=true
+        if [[ -n "$last_repo_signature" \
+           && ( "$current_head_oid" != "$last_head_oid" \
+             || "$current_primary_oid" != "$last_primary_oid" ) ]]; then
+            case "$cur_theme" in
+                adaptive-diamond|pulse-arrow) pulse=strong; pulse_delay=0.2 ;;
+            esac
+        elif [[ "$should_draw" == true && "$cur_theme" == pulse-arrow ]]; then
+            pulse=strong; pulse_delay=0.2
+        fi
+        if [[ "$should_draw" == true && "$pulse" != none ]]; then
             _surf_draw_log "$cur_pwd" "$cur_theme" "$pulse"
             sleep "$pulse_delay"
         fi
-        _surf_draw_log "$cur_pwd" "$cur_theme"
+        [[ "$should_draw" == true ]] && _surf_draw_log "$cur_pwd" "$cur_theme"
         last_pwd="$cur_pwd"
         last_refresh="$cur_refresh"
         last_head_oid="$current_head_oid"
+        last_primary_oid="$current_primary_oid"
+        last_repo_signature="$current_repo_signature"
+        last_render_config_signature="$current_render_config_signature"
         last_theme="$cur_theme"
     fi
 
