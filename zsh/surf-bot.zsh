@@ -59,7 +59,7 @@ _surf_draw_log() {
     local theme="${2:-adaptive-diamond}"
     local pulse="${3:-none}"
     local -a log_cmd
-    local head_oid head_short main_oid
+    local head_oid head_short primary_oid='' primary_name=''
     local separator=$'\x1f'
     # Query actual pane height each draw so resizes and rounding never mismatch
     local rows cols
@@ -88,13 +88,54 @@ _surf_draw_log() {
 
     head_oid=$("${log_cmd[@]}" rev-parse HEAD 2>/dev/null)
     head_short=$("${log_cmd[@]}" rev-parse --short HEAD 2>/dev/null)
-    main_oid=$("${log_cmd[@]}" rev-parse --verify refs/heads/main 2>/dev/null) \
-        || main_oid=$("${log_cmd[@]}" rev-parse --verify refs/remotes/origin/main 2>/dev/null)
-    local gutter_width=8 gutter='        '
-    if [[ -n "$main_oid" && "$head_oid" == "$main_oid" ]]; then
-        [[ "$theme" == powerline ]] && gutter_width=15 || gutter_width=13
-        printf -v gutter '%*s' "$gutter_width" ''
+    local configured_primary primary_ref candidate
+    configured_primary=$("${log_cmd[@]}" config --get surf.primaryBranch 2>/dev/null)
+    if [[ -n "$configured_primary" ]]; then
+        for candidate in "refs/heads/$configured_primary" \
+                         "refs/remotes/origin/$configured_primary" \
+                         "$configured_primary"; do
+            primary_oid=$("${log_cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
+            primary_name="${configured_primary#refs/heads/}"
+            primary_name="${primary_name#refs/remotes/origin/}"
+            break
+        done
     fi
+    if [[ -z "$primary_oid" ]]; then
+        primary_ref=$("${log_cmd[@]}" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
+        if [[ -n "$primary_ref" ]]; then
+            primary_name="${primary_ref#refs/remotes/origin/}"
+            # origin/HEAD identifies the primary branch by name, but its
+            # remote-tracking commit may lag a local branch that is ahead.
+            # Prefer the local branch position when that branch exists.
+            primary_oid=$("${log_cmd[@]}" rev-parse --verify \
+                "refs/heads/$primary_name" 2>/dev/null) \
+                || primary_oid=$("${log_cmd[@]}" rev-parse --verify \
+                    "$primary_ref" 2>/dev/null) \
+                || primary_oid=''
+            [[ -n "$primary_oid" ]] || primary_name=''
+        fi
+    fi
+    if [[ -z "$primary_oid" ]]; then
+        for candidate in refs/heads/main refs/heads/master \
+                         refs/remotes/origin/main refs/remotes/origin/master; do
+            primary_oid=$("${log_cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
+            primary_name="${candidate##*/}"
+            break
+        done
+    fi
+
+    local gutter_width=8 gutter='        '
+    if [[ -n "$primary_name" ]]; then
+        (( ${#primary_name} + 4 > gutter_width )) && gutter_width=$(( ${#primary_name} + 4 ))
+    fi
+    if [[ -n "$primary_oid" && "$head_oid" == "$primary_oid" ]]; then
+        if [[ "$theme" == powerline ]]; then
+            gutter_width=$(( ${#primary_name} + 11 ))
+        else
+            gutter_width=$(( ${#primary_name} + 9 ))
+        fi
+    fi
+    printf -v gutter '%*s' "$gutter_width" ''
     [[ "$theme" == hash ]] && gutter=''
 
     "${log_cmd[@]}" \
@@ -110,63 +151,65 @@ _surf_draw_log() {
             local oid="${graph_and_oid[-${#head_oid},-1]}"
             local graph="${graph_and_oid[1,-$(( ${#head_oid} + 1 ))]}"
             local head_node=$'\033[1;96m◆\033[0m'
-            local main_node=$'\033[1;32m◆\033[0m'
+            local primary_node=$'\033[1;32m◆\033[0m'
             local head_graph="${graph/\*/$head_node}"
-            local main_graph="${graph/\*/$main_node}"
-            local is_head=false is_main=false label=HEAD arrow=' -> '
+            local primary_graph="${graph/\*/$primary_node}"
+            local is_head=false is_primary=false label=HEAD arrow=' -> '
             [[ "$oid" == "$head_oid" ]] && is_head=true
-            [[ -n "$main_oid" && "$oid" == "$main_oid" ]] && is_main=true
-            if [[ "$is_head" == true && "$is_main" == true ]]; then
-                label='HEAD+main'
+            [[ -n "$primary_oid" && "$oid" == "$primary_oid" ]] && is_primary=true
+            if [[ "$is_head" == true && "$is_primary" == true ]]; then
+                label="HEAD+${primary_name}"
             fi
 
             if [[ "$is_head" == true ]]; then
                 local plain='' padding='' cyan_reset=$'\033[0;48;5;23m'
+                local label_padding=''
+                printf -v label_padding '%*s' "$(( gutter_width - ${#label} - 4 ))" ''
                 local hash_badge=$'\033[1;97;44m'"${head_short}"$'\033[0m'
                 local styled_label=$'\033[1;96mHEAD\033[0m'
                 local pulsed_label=$'\033[1;30;46mHEAD\033[0m'
-                if [[ "$is_main" == true ]]; then
-                    styled_label+=$'\033[97m+\033[1;32mmain\033[0m'
-                    pulsed_label+=$'\033[97m+\033[1;32mmain\033[0m'
+                if [[ "$is_primary" == true ]]; then
+                    styled_label+=$'\033[97m+\033[1;32m'"${primary_name}"$'\033[0m'
+                    pulsed_label+=$'\033[97m+\033[1;32m'"${primary_name}"$'\033[0m'
                 fi
                 case "$theme" in
                     adaptive-diamond)
                         if [[ "$pulse" == strong ]]; then
-                            plain=$(printf '%s' "${label}${arrow}${graph/\*/◆}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
+                            plain=$(printf '%s' "${label}${arrow}${label_padding}${graph/\*/◆}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
                             printf -v padding '%*s' "$cols" ''
                             line=$'\033[1;30;46m'"${plain}${padding}"
                         elif [[ "$pulse" == subtle ]]; then
-                            line="${pulsed_label}"$'\033[97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
+                            line="${pulsed_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${head_graph}${rendered}"
                         else
-                            line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
+                            line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${head_graph}${rendered}"
                         fi
                         ;;
                     pulse-arrow)
                         if [[ "$pulse" == strong ]]; then
-                            plain=$(printf '%s' "${label}${arrow}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
+                            plain=$(printf '%s' "${label}${arrow}${label_padding}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
                             printf -v padding '%*s' "$cols" ''
                             line=$'\033[1;30;46m'"${plain}${padding}"
                         else
-                            line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                            line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
                         fi
                         ;;
                     arrow)
-                        line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                        line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
                         ;;
                     powerline)
-                        if [[ "$is_main" == true ]]; then
-                            line=$'\033[1;30;46m HEAD \033[36;42m\033[30m main \033[0;32m\033[0m '"${graph}${rendered}"
+                        if [[ "$is_primary" == true ]]; then
+                            line=$'\033[1;30;46m HEAD \033[36;42m\033[30m '"${primary_name}"$' \033[0;32m\033[0m '"${graph}${rendered}"
                         else
-                            line=$'\033[1;30;46m HEAD \033[0;36m\033[0m '"${graph}${rendered}"
+                            line=$'\033[1;30;46m HEAD \033[0;36m\033[0m '"${label_padding}${graph}${rendered}"
                         fi
                         ;;
                     row-yellow)
-                        plain=$(printf '%s' "${label}${arrow}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
+                        plain=$(printf '%s' "${label}${arrow}${label_padding}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
                         printf -v padding '%*s' "$cols" ''
                         line=$'\033[1;30;103m'"${plain}${padding}"
                         ;;
                     row-cyan)
-                        line=$'\033[48;5;23m'"${styled_label}"$'\033[22;97m'"${arrow}${graph}${rendered}"
+                        line=$'\033[48;5;23m'"${styled_label}"$'\033[22;97m'"${arrow}${label_padding}${graph}${rendered}"
                         line="${line//$'\033[0m'/$cyan_reset}"
                         line="${line//$'\033[m'/$cyan_reset}"
                         printf -v padding '%*s' "$cols" ''
@@ -174,19 +217,21 @@ _surf_draw_log() {
                         ;;
                     arrow-hash)
                         rendered="${rendered/$head_short/$hash_badge}"
-                        line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                        line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
                         ;;
                     hash)
                         rendered="${rendered/$head_short/$hash_badge}"
                         line="${graph}${rendered}"
                         ;;
                 esac
-            elif [[ -n "$main_oid" && "$oid" == "$main_oid" ]]; then
+            elif [[ -n "$primary_oid" && "$oid" == "$primary_oid" ]]; then
+                local primary_padding=''
+                printf -v primary_padding '%*s' "$(( gutter_width - ${#primary_name} - 4 ))" ''
                 case "$theme" in
                     hash) line="${graph}${rendered}" ;;
-                    powerline) line=$'\033[1;30;42m main \033[0;32m\033[0m '"${graph}${rendered}" ;;
-                    adaptive-diamond) line=$'\033[1;32mmain\033[0;97m -> \033[0m'"${main_graph}${rendered}" ;;
-                    *) line=$'\033[1;32mmain\033[0;97m -> \033[0m'"${graph}${rendered}" ;;
+                    powerline) line=$'\033[1;30;42m '"${primary_name}"$' \033[0;32m\033[0m '"${primary_padding}${graph}${rendered}" ;;
+                    adaptive-diamond) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${primary_graph}${rendered}" ;;
+                    *) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${graph}${rendered}" ;;
                 esac
             else
                 line="${gutter}${graph}${rendered}"

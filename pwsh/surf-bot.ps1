@@ -88,27 +88,74 @@ function Draw-GitLog {
         # yadm covers $HOME recursively. A regular nested repository still wins.
         $headOid = yadm rev-parse HEAD 2>$null
         $headShort = yadm rev-parse --short HEAD 2>$null
-        $mainOid = yadm rev-parse --verify refs/heads/main 2>$null
-        if (-not $mainOid) {
-            $mainOid = yadm rev-parse --verify refs/remotes/origin/main 2>$null
-        }
         $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
     } else {
         $headOid = git -C $Dir rev-parse HEAD 2>$null
         $headShort = git -C $Dir rev-parse --short HEAD 2>$null
-        $mainOid = git -C $Dir rev-parse --verify refs/heads/main 2>$null
-        if (-not $mainOid) {
-            $mainOid = git -C $Dir rev-parse --verify refs/remotes/origin/main 2>$null
-        }
         $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
     }
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
         return
     }
+
+    function Invoke-RepoGit {
+        param([string[]]$Arguments)
+        if ($useYadm) { & yadm @Arguments } else { & git -C $Dir @Arguments }
+    }
+
+    $primaryOid = $null
+    $primaryName = $null
+    $configuredPrimary = Invoke-RepoGit @("config", "--get", "surf.primaryBranch") 2>$null
+    if ($configuredPrimary) {
+        foreach ($candidate in @("refs/heads/$configuredPrimary",
+                "refs/remotes/origin/$configuredPrimary", $configuredPrimary)) {
+            $resolved = Invoke-RepoGit @("rev-parse", "--verify", $candidate) 2>$null
+            if ($resolved) {
+                $primaryOid = $resolved
+                $primaryName = $configuredPrimary -replace '^refs/heads/', '' `
+                    -replace '^refs/remotes/origin/', ''
+                break
+            }
+        }
+    }
+    if (-not $primaryOid) {
+        $primaryRef = Invoke-RepoGit @("symbolic-ref", "--quiet",
+            "refs/remotes/origin/HEAD") 2>$null
+        if ($primaryRef) {
+            $primaryName = $primaryRef -replace '^refs/remotes/origin/', ''
+            # Use origin/HEAD to discover the branch name, then prefer the
+            # local branch position when it is ahead of its tracking ref.
+            $primaryOid = Invoke-RepoGit @("rev-parse", "--verify",
+                "refs/heads/$primaryName") 2>$null
+            if (-not $primaryOid) {
+                $primaryOid = Invoke-RepoGit @("rev-parse", "--verify", $primaryRef) 2>$null
+            }
+            if (-not $primaryOid) { $primaryName = $null }
+        }
+    }
+    if (-not $primaryOid) {
+        foreach ($candidate in @("refs/heads/main", "refs/heads/master",
+                "refs/remotes/origin/main", "refs/remotes/origin/master")) {
+            $resolved = Invoke-RepoGit @("rev-parse", "--verify", $candidate) 2>$null
+            if ($resolved) {
+                $primaryOid = $resolved
+                $primaryName = Split-Path $candidate -Leaf
+                break
+            }
+        }
+    }
+
     $gutterWidth = 8
-    if ($mainOid -and $headOid -eq $mainOid) {
-        $gutterWidth = if ($Theme -eq "powerline") { 15 } else { 13 }
+    if ($primaryName) {
+        $gutterWidth = [Math]::Max($gutterWidth, $primaryName.Length + 4)
+    }
+    if ($primaryOid -and $headOid -eq $primaryOid) {
+        $gutterWidth = if ($Theme -eq "powerline") {
+            $primaryName.Length + 11
+        } else {
+            $primaryName.Length + 9
+        }
     }
     if ($Theme -eq "hash") { $gutterWidth = 0 }
     $gutter = " " * $gutterWidth
@@ -125,73 +172,79 @@ function Draw-GitLog {
                 $graph = $graphAndOid.Substring(0, $oidAt)
                 $starAt = $graph.IndexOf('*')
                 $headGraph = $graph
-                $mainGraph = $graph
+                $primaryGraph = $graph
                 if ($starAt -ge 0) {
                     $headGraph = $graph.Substring(0, $starAt) + "`e[1;96m◆`e[0m" +
                         $graph.Substring($starAt + 1)
-                    $mainGraph = $graph.Substring(0, $starAt) + "`e[1;32m◆`e[0m" +
+                    $primaryGraph = $graph.Substring(0, $starAt) + "`e[1;32m◆`e[0m" +
                         $graph.Substring($starAt + 1)
                 }
                 $isHead = $oid -eq $headOid
-                $isMain = $mainOid -and $oid -eq $mainOid
+                $isPrimary = $primaryOid -and $oid -eq $primaryOid
                 if ($isHead) {
-                    $label = if ($isMain) { "HEAD+main" } else { "HEAD" }
+                    $label = if ($isPrimary) { "HEAD+$primaryName" } else { "HEAD" }
                     $arrow = " -> "
+                    $labelPadding = " " * ($gutterWidth - $label.Length - 4)
                     $styledLabel = "`e[1;96mHEAD`e[0m"
                     $pulsedLabel = "`e[1;30;46mHEAD`e[0m"
-                    if ($isMain) {
-                        $styledLabel += "`e[97m+`e[1;32mmain`e[0m"
-                        $pulsedLabel += "`e[97m+`e[1;32mmain`e[0m"
+                    if ($isPrimary) {
+                        $styledLabel += "`e[97m+`e[1;32m$primaryName`e[0m"
+                        $pulsedLabel += "`e[97m+`e[1;32m$primaryName`e[0m"
                     }
                     switch ($Theme) {
                         "adaptive-diamond" {
                             if ($Pulse -eq "Strong") {
-                                $plain = [regex]::Replace($label + $arrow +
+                                $plain = [regex]::Replace($label + $arrow + $labelPadding +
                                     $graph.Replace('*', '◆') + $rendered,
                                     "`e\[[0-9;]*m", "")
                                 if ($plain.Length -gt $cols) { $plain = $plain.Substring(0, $cols) }
                                 $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
                                 $sizedHead = $true
                             } elseif ($Pulse -eq "Subtle") {
-                                $l = $pulsedLabel + "`e[97m$arrow`e[0m" +
+                                $l = $pulsedLabel + "`e[97m$arrow$labelPadding`e[0m" +
                                     $headGraph + $rendered
                             } else {
-                                $l = $styledLabel + "`e[97m$arrow`e[0m" +
+                                $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
                                     $headGraph + $rendered
                             }
                         }
                         "pulse-arrow" {
                             if ($Pulse -eq "Strong") {
-                                $plain = [regex]::Replace($label + $arrow + $graph + $rendered,
+                                $plain = [regex]::Replace($label + $arrow + $labelPadding +
+                                    $graph + $rendered,
                                     "`e\[[0-9;]*m", "")
                                 if ($plain.Length -gt $cols) { $plain = $plain.Substring(0, $cols) }
                                 $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
                                 $sizedHead = $true
                             } else {
-                                $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
+                                $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
+                                    $graph + $rendered
                             }
                         }
                         "arrow" {
-                            $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
+                            $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
+                                $graph + $rendered
                         }
                         "powerline" {
-                            if ($isMain) {
-                                $l = "`e[1;30;46m HEAD `e[36;42m`e[30m main `e[0;32m`e[0m " +
+                            if ($isPrimary) {
+                                $l = "`e[1;30;46m HEAD `e[36;42m`e[30m $primaryName `e[0;32m`e[0m " +
                                     $graph + $rendered
                             } else {
-                                $l = "`e[1;30;46m HEAD `e[0;36m`e[0m " + $graph + $rendered
+                                $l = "`e[1;30;46m HEAD `e[0;36m`e[0m " +
+                                    $labelPadding + $graph + $rendered
                             }
                         }
                         "row-yellow" {
-                            $plain = [regex]::Replace($label + $arrow + $graph + $rendered,
+                            $plain = [regex]::Replace($label + $arrow + $labelPadding +
+                                $graph + $rendered,
                                 "`e\[[0-9;]*m", "")
                             if ($plain.Length -gt $cols) { $plain = $plain.Substring(0, $cols) }
                             $l = "`e[1;30;103m" + $plain.PadRight($cols) + "`e[0m"
                             $sizedHead = $true
                         }
                         "row-cyan" {
-                            $l = "`e[48;5;23m" + $styledLabel + "`e[22;97m$arrow" +
-                                $graph + $rendered
+                            $l = "`e[48;5;23m" + $styledLabel +
+                                "`e[22;97m$arrow$labelPadding" + $graph + $rendered
                             $l = $l.Replace("`e[0m", "`e[0;48;5;23m").Replace(
                                 "`e[m", "`e[0;48;5;23m") + "`e[K`e[0m"
                             $sizedHead = $true
@@ -199,7 +252,8 @@ function Draw-GitLog {
                         "arrow-hash" {
                             $rendered = $rendered.Replace($headShort,
                                 "`e[1;97;44m$headShort`e[0m")
-                            $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
+                            $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
+                                $graph + $rendered
                         }
                         "hash" {
                             $rendered = $rendered.Replace($headShort,
@@ -207,15 +261,19 @@ function Draw-GitLog {
                             $l = $graph + $rendered
                         }
                     }
-                } elseif ($mainOid -and $oid -eq $mainOid) {
+                } elseif ($primaryOid -and $oid -eq $primaryOid) {
+                    $primaryPadding = " " * ($gutterWidth - $primaryName.Length - 4)
                     if ($Theme -eq "hash") {
                         $l = $graph + $rendered
                     } elseif ($Theme -eq "powerline") {
-                        $l = "`e[1;30;42m main `e[0;32m`e[0m " + $graph + $rendered
+                        $l = "`e[1;30;42m $primaryName `e[0;32m`e[0m " +
+                            $primaryPadding + $graph + $rendered
                     } elseif ($Theme -eq "adaptive-diamond") {
-                        $l = "`e[1;32mmain`e[0;97m -> `e[0m" + $mainGraph + $rendered
+                        $l = "`e[1;32m$primaryName`e[0;97m -> `e[0m" + $primaryPadding +
+                            $primaryGraph + $rendered
                     } else {
-                        $l = "`e[1;32mmain`e[0;97m -> `e[0m" + $graph + $rendered
+                        $l = "`e[1;32m$primaryName`e[0;97m -> `e[0m" + $primaryPadding +
+                            $graph + $rendered
                     }
                 } else {
                     $l = $gutter + $graph + $rendered

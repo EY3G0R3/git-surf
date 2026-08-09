@@ -30,9 +30,24 @@ restart the interactive shell.
 | `arrow-hash` | `HEAD -> *` gutter plus a dark-blue hash badge |
 | `hash` | Dark-blue HEAD hash badge without a gutter |
 
-Themes label the branch as lowercase `main`, matching its ref name. When HEAD
-and main point to the same commit, gutter themes show `HEAD+main`; the
-Powerline theme renders adjacent `HEAD` and `main` chips instead.
+Themes use the repository's actual primary-branch name. When HEAD and that
+branch point to the same commit, gutter themes show labels such as `HEAD+main`
+or `HEAD+master`; the Powerline theme renders adjacent `HEAD` and branch-name
+chips instead.
+
+Surf resolves the primary branch in this order:
+
+1. The repository's `surf.primaryBranch` Git configuration.
+2. The default branch name from `refs/remotes/origin/HEAD`, using its local
+   branch commit when present and the remote-tracking commit otherwise.
+3. Local `main`, then local `master`.
+4. Remote `origin/main`, then `origin/master`.
+
+For an unusual default such as `trunk`, override detection with:
+
+```sh
+git config surf.primaryBranch trunk
+```
 
 PowerShell exposes the same names:
 
