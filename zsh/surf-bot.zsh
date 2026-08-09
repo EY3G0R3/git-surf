@@ -90,6 +90,12 @@ _surf_draw_log() {
     head_short=$("${log_cmd[@]}" rev-parse --short HEAD 2>/dev/null)
     main_oid=$("${log_cmd[@]}" rev-parse --verify refs/heads/main 2>/dev/null) \
         || main_oid=$("${log_cmd[@]}" rev-parse --verify refs/remotes/origin/main 2>/dev/null)
+    local gutter_width=8 gutter='        '
+    if [[ -n "$main_oid" && "$head_oid" == "$main_oid" ]]; then
+        [[ "$theme" == powerline ]] && gutter_width=15 || gutter_width=13
+        printf -v gutter '%*s' "$gutter_width" ''
+    fi
+    [[ "$theme" == hash ]] && gutter=''
 
     "${log_cmd[@]}" \
         log --pretty=format:'%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' \
@@ -111,13 +117,18 @@ _surf_draw_log() {
             [[ "$oid" == "$head_oid" ]] && is_head=true
             [[ -n "$main_oid" && "$oid" == "$main_oid" ]] && is_main=true
             if [[ "$is_head" == true && "$is_main" == true ]]; then
-                label=H+M
-                arrow=' ->  '
+                label='HEAD+main'
             fi
 
             if [[ "$is_head" == true ]]; then
                 local plain='' padding='' cyan_reset=$'\033[0;48;5;23m'
                 local hash_badge=$'\033[1;97;44m'"${head_short}"$'\033[0m'
+                local styled_label=$'\033[1;96mHEAD\033[0m'
+                local pulsed_label=$'\033[1;30;46mHEAD\033[0m'
+                if [[ "$is_main" == true ]]; then
+                    styled_label+=$'\033[97m+\033[1;32mmain\033[0m'
+                    pulsed_label+=$'\033[97m+\033[1;32mmain\033[0m'
+                fi
                 case "$theme" in
                     adaptive-diamond)
                         if [[ "$pulse" == strong ]]; then
@@ -125,9 +136,9 @@ _surf_draw_log() {
                             printf -v padding '%*s' "$cols" ''
                             line=$'\033[1;30;46m'"${plain}${padding}"
                         elif [[ "$pulse" == subtle ]]; then
-                            line=$'\033[1;30;46m'"${label}"$'\033[0;97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
+                            line="${pulsed_label}"$'\033[97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
                         else
-                            line=$'\033[1;96m'"${label}"$'\033[0;97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
+                            line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${head_graph}${rendered}"
                         fi
                         ;;
                     pulse-arrow)
@@ -136,15 +147,15 @@ _surf_draw_log() {
                             printf -v padding '%*s' "$cols" ''
                             line=$'\033[1;30;46m'"${plain}${padding}"
                         else
-                            line=$'\033[1;96m'"${label}"$'\033[0;97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                            line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
                         fi
                         ;;
                     arrow)
-                        line=$'\033[1;96m'"${label}"$'\033[0;97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                        line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
                         ;;
                     powerline)
-                        if [[ "$label" == H+M ]]; then
-                            line=$'\033[1;30;43m H+M  \033[0;33m\033[0m '"${graph}${rendered}"
+                        if [[ "$is_main" == true ]]; then
+                            line=$'\033[1;30;46m HEAD \033[36;42m\033[30m main \033[0;32m\033[0m '"${graph}${rendered}"
                         else
                             line=$'\033[1;30;46m HEAD \033[0;36m\033[0m '"${graph}${rendered}"
                         fi
@@ -155,7 +166,7 @@ _surf_draw_log() {
                         line=$'\033[1;30;103m'"${plain}${padding}"
                         ;;
                     row-cyan)
-                        line=$'\033[48;5;23m\033[1;97m'"${label}"$'\033[22m'"${arrow}${graph}${rendered}"
+                        line=$'\033[48;5;23m'"${styled_label}"$'\033[22;97m'"${arrow}${graph}${rendered}"
                         line="${line//$'\033[0m'/$cyan_reset}"
                         line="${line//$'\033[m'/$cyan_reset}"
                         printf -v padding '%*s' "$cols" ''
@@ -163,7 +174,7 @@ _surf_draw_log() {
                         ;;
                     arrow-hash)
                         rendered="${rendered/$head_short/$hash_badge}"
-                        line=$'\033[1;96m'"${label}"$'\033[0;97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
+                        line="${styled_label}"$'\033[97m'"${arrow}"$'\033[0m'"${graph}${rendered}"
                         ;;
                     hash)
                         rendered="${rendered/$head_short/$hash_badge}"
@@ -173,18 +184,17 @@ _surf_draw_log() {
             elif [[ -n "$main_oid" && "$oid" == "$main_oid" ]]; then
                 case "$theme" in
                     hash) line="${graph}${rendered}" ;;
-                    powerline) line=$'\033[1;30;42m MAIN \033[0;32m\033[0m '"${graph}${rendered}" ;;
-                    adaptive-diamond) line=$'\033[1;32mMAIN\033[0;97m -> \033[0m'"${main_graph}${rendered}" ;;
-                    *) line=$'\033[1;32mMAIN\033[0;97m -> \033[0m'"${graph}${rendered}" ;;
+                    powerline) line=$'\033[1;30;42m main \033[0;32m\033[0m '"${graph}${rendered}" ;;
+                    adaptive-diamond) line=$'\033[1;32mmain\033[0;97m -> \033[0m'"${main_graph}${rendered}" ;;
+                    *) line=$'\033[1;32mmain\033[0;97m -> \033[0m'"${graph}${rendered}" ;;
                 esac
             else
-                [[ "$theme" == hash ]] && line="${graph}${rendered}" \
-                    || line="        ${graph}${rendered}"
+                line="${gutter}${graph}${rendered}"
             fi
         else
             # Graph connector-only rows need the same gutter to preserve the
             # shape and alignment of merge lines.
-            [[ "$theme" == hash ]] || line="        ${line}"
+            line="${gutter}${line}"
         fi
         _surf_truncate_ansi "$line" "$cols"
         printf '%s\n' "$REPLY"

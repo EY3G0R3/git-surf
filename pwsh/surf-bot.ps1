@@ -106,6 +106,12 @@ function Draw-GitLog {
         Write-Host "(no commits)" -ForegroundColor DarkGray
         return
     }
+    $gutterWidth = 8
+    if ($mainOid -and $headOid -eq $mainOid) {
+        $gutterWidth = if ($Theme -eq "powerline") { 15 } else { 13 }
+    }
+    if ($Theme -eq "hash") { $gutterWidth = 0 }
+    $gutter = " " * $gutterWidth
 
     foreach ($l in ($lines | Select-Object -First $rows)) {
         $sizedHead = $false
@@ -129,8 +135,14 @@ function Draw-GitLog {
                 $isHead = $oid -eq $headOid
                 $isMain = $mainOid -and $oid -eq $mainOid
                 if ($isHead) {
-                    $label = if ($isMain) { "H+M" } else { "HEAD" }
-                    $arrow = if ($isMain) { " ->  " } else { " -> " }
+                    $label = if ($isMain) { "HEAD+main" } else { "HEAD" }
+                    $arrow = " -> "
+                    $styledLabel = "`e[1;96mHEAD`e[0m"
+                    $pulsedLabel = "`e[1;30;46mHEAD`e[0m"
+                    if ($isMain) {
+                        $styledLabel += "`e[97m+`e[1;32mmain`e[0m"
+                        $pulsedLabel += "`e[97m+`e[1;32mmain`e[0m"
+                    }
                     switch ($Theme) {
                         "adaptive-diamond" {
                             if ($Pulse -eq "Strong") {
@@ -141,10 +153,10 @@ function Draw-GitLog {
                                 $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
                                 $sizedHead = $true
                             } elseif ($Pulse -eq "Subtle") {
-                                $l = "`e[1;30;46m$label`e[0;97m$arrow`e[0m" +
+                                $l = $pulsedLabel + "`e[97m$arrow`e[0m" +
                                     $headGraph + $rendered
                             } else {
-                                $l = "`e[1;96m$label`e[0;97m$arrow`e[0m" +
+                                $l = $styledLabel + "`e[97m$arrow`e[0m" +
                                     $headGraph + $rendered
                             }
                         }
@@ -156,15 +168,16 @@ function Draw-GitLog {
                                 $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
                                 $sizedHead = $true
                             } else {
-                                $l = "`e[1;96m$label`e[0;97m$arrow`e[0m" + $graph + $rendered
+                                $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
                             }
                         }
                         "arrow" {
-                            $l = "`e[1;96m$label`e[0;97m$arrow`e[0m" + $graph + $rendered
+                            $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
                         }
                         "powerline" {
                             if ($isMain) {
-                                $l = "`e[1;30;43m H+M  `e[0;33m`e[0m " + $graph + $rendered
+                                $l = "`e[1;30;46m HEAD `e[36;42m`e[30m main `e[0;32m`e[0m " +
+                                    $graph + $rendered
                             } else {
                                 $l = "`e[1;30;46m HEAD `e[0;36m`e[0m " + $graph + $rendered
                             }
@@ -177,7 +190,8 @@ function Draw-GitLog {
                             $sizedHead = $true
                         }
                         "row-cyan" {
-                            $l = "`e[48;5;23m`e[1;97m$label`e[22m$arrow" + $graph + $rendered
+                            $l = "`e[48;5;23m" + $styledLabel + "`e[22;97m$arrow" +
+                                $graph + $rendered
                             $l = $l.Replace("`e[0m", "`e[0;48;5;23m").Replace(
                                 "`e[m", "`e[0;48;5;23m") + "`e[K`e[0m"
                             $sizedHead = $true
@@ -185,7 +199,7 @@ function Draw-GitLog {
                         "arrow-hash" {
                             $rendered = $rendered.Replace($headShort,
                                 "`e[1;97;44m$headShort`e[0m")
-                            $l = "`e[1;96m$label`e[0;97m$arrow`e[0m" + $graph + $rendered
+                            $l = $styledLabel + "`e[97m$arrow`e[0m" + $graph + $rendered
                         }
                         "hash" {
                             $rendered = $rendered.Replace($headShort,
@@ -197,24 +211,20 @@ function Draw-GitLog {
                     if ($Theme -eq "hash") {
                         $l = $graph + $rendered
                     } elseif ($Theme -eq "powerline") {
-                        $l = "`e[1;30;42m MAIN `e[0;32m`e[0m " + $graph + $rendered
+                        $l = "`e[1;30;42m main `e[0;32m`e[0m " + $graph + $rendered
                     } elseif ($Theme -eq "adaptive-diamond") {
-                        $l = "`e[1;32mMAIN`e[0;97m -> `e[0m" + $mainGraph + $rendered
+                        $l = "`e[1;32mmain`e[0;97m -> `e[0m" + $mainGraph + $rendered
                     } else {
-                        $l = "`e[1;32mMAIN`e[0;97m -> `e[0m" + $graph + $rendered
+                        $l = "`e[1;32mmain`e[0;97m -> `e[0m" + $graph + $rendered
                     }
                 } else {
-                    $l = if ($Theme -eq "hash") {
-                        $graph + $rendered
-                    } else {
-                        "        " + $graph + $rendered
-                    }
+                    $l = $gutter + $graph + $rendered
                 }
             }
         } else {
             # Graph connector-only rows need the same gutter to preserve the
             # shape and alignment of merge lines.
-            if ($Theme -ne "hash") { $l = "        " + $l }
+            $l = $gutter + $l
         }
         # Naive truncation to terminal width (ANSI codes count toward the limit,
         # same as cut -c in the Linux version)

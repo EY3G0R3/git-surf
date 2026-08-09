@@ -30,6 +30,10 @@ restart the interactive shell.
 | `arrow-hash` | `HEAD -> *` gutter plus a dark-blue hash badge |
 | `hash` | Dark-blue HEAD hash badge without a gutter |
 
+Themes label the branch as lowercase `main`, matching its ref name. When HEAD
+and main point to the same commit, gutter themes show `HEAD+main`; the
+Powerline theme renders adjacent `HEAD` and `main` chips instead.
+
 PowerShell exposes the same names:
 
 ```powershell
