@@ -60,8 +60,11 @@ _surf_draw_log() {
     local pulse="${3:-none}"
     local -a log_cmd
     local -a log_lines decoration_args
-    local -A wide_branches
+    local -A wide_branches custom_remotes
     local head_oid head_short primary_oid='' primary_name=''
+    local ref_style=text configured_separator=arrow configured_right_separator=arrow
+    local configured_node=star configured_head_node=star
+    local show_date=yes show_author=yes highlight_row=no pretty
     local separator=$'\x1f'
     # Query actual pane height each draw so resizes and rounding never mismatch
     local rows cols
@@ -86,6 +89,33 @@ _surf_draw_log() {
     else
         printf '%s\n' "$(tput setaf 3)not a git repository: $dir$(tput sgr0)"
         return
+    fi
+
+    if [[ "$theme" == custom ]]; then
+        ref_style=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_REF_STYLE 2>/dev/null \
+                    | sed -n 's/^SURF_GIT_REF_STYLE=//p')
+        configured_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SEPARATOR 2>/dev/null \
+                               | sed -n 's/^SURF_GIT_SEPARATOR=//p')
+        configured_right_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_RIGHT_SEPARATOR 2>/dev/null \
+                                     | sed -n 's/^SURF_GIT_RIGHT_SEPARATOR=//p')
+        configured_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_NODE 2>/dev/null \
+                      | sed -n 's/^SURF_GIT_NODE=//p')
+        configured_head_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HEAD_NODE 2>/dev/null \
+                               | sed -n 's/^SURF_GIT_HEAD_NODE=//p')
+        show_date=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SHOW_DATE 2>/dev/null \
+                    | sed -n 's/^SURF_GIT_SHOW_DATE=//p')
+        show_author=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SHOW_AUTHOR 2>/dev/null \
+                      | sed -n 's/^SURF_GIT_SHOW_AUTHOR=//p')
+        highlight_row=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HIGHLIGHT_ROW 2>/dev/null \
+                        | sed -n 's/^SURF_GIT_HIGHLIGHT_ROW=//p')
+        [[ "$ref_style" == powerline ]] || ref_style=text
+        [[ "$configured_separator" == none ]] || configured_separator=arrow
+        [[ "$configured_right_separator" == none ]] || configured_right_separator=arrow
+        [[ "$configured_node" == diamond ]] || configured_node=star
+        [[ "$configured_head_node" == diamond ]] || configured_head_node=star
+        [[ "$show_date" == no ]] || show_date=yes
+        [[ "$show_author" == no ]] || show_author=yes
+        [[ "$highlight_row" == yes ]] || highlight_row=no
     fi
 
     head_oid=$("${log_cmd[@]}" rev-parse HEAD 2>/dev/null)
@@ -126,9 +156,22 @@ _surf_draw_log() {
         done
     fi
 
-    [[ "$theme" == wide ]] && decoration_args=(--decorate-refs=refs/remotes --decorate-refs=refs/tags)
+    if [[ "$theme" == wide ]]; then
+        decoration_args=(--decorate-refs=refs/remotes --decorate-refs=refs/tags)
+    elif [[ "$theme" == custom ]]; then
+        # Remote refs are rendered separately so they can use a mirrored,
+        # independently configurable separator. Git still owns tag decoration.
+        decoration_args=(--decorate-refs=refs/tags)
+    fi
+    pretty='%H%x1f%C(yellow)%h%C(reset)'
+    [[ "$theme" != custom || "$show_date" == yes ]] \
+        && pretty+=' %C(green)%>|(25)%cr%C(reset)'
+    pretty+=' %s'
+    [[ "$theme" != custom || "$show_author" == yes ]] \
+        && pretty+=' %C(bold blue)<%cl>%C(reset)'
+    pretty+=' %C(auto)%D%C(reset)'
     log_lines=("${(@f)$("${log_cmd[@]}" \
-        log --pretty=format:'%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' \
+        log "--pretty=format:${pretty}" \
         --graph --all -n "$rows" \
         --color=always "${decoration_args[@]}" \
         2>/dev/null)}")
@@ -138,7 +181,7 @@ _surf_draw_log() {
     if [[ -n "$primary_name" ]]; then
         (( ${#primary_name} + 4 > gutter_width )) && gutter_width=$(( ${#primary_name} + 4 ))
     fi
-    if [[ "$theme" == wide ]]; then
+    if [[ "$theme" == wide || "$theme" == custom ]]; then
         gutter_width=1
         local ref_line ref_oid ref_name visible_line
         while IFS= read -r ref_line; do
@@ -155,20 +198,50 @@ _surf_draw_log() {
             done
         done < <("${log_cmd[@]}" for-each-ref --format='%(objectname) %(refname:short)' refs/heads 2>/dev/null)
 
+        if [[ "$theme" == custom ]]; then
+            while IFS= read -r ref_line; do
+                ref_oid="${ref_line%% *}"
+                ref_name="${ref_line#* }"
+                ref_name="${ref_name#refs/remotes/}"
+                for visible_line in "${log_lines[@]}"; do
+                    [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
+                    if [[ -n "${custom_remotes[$ref_oid]}" ]]; then
+                        custom_remotes[$ref_oid]+=$'\n'"${ref_name}"
+                    else
+                        custom_remotes[$ref_oid]="$ref_name"
+                    fi
+                    break
+                done
+            done < <("${log_cmd[@]}" for-each-ref \
+                --format='%(objectname) %(refname)' refs/remotes 2>/dev/null)
+        fi
+
         local wide_oid wide_names wide_width wide_name
         for wide_oid wide_names in "${(@kv)wide_branches}"; do
             wide_width=0
-            [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 8 ))
-            for wide_name in "${(f)wide_names}"; do
-                (( wide_width += ${#wide_name} + 4 ))
-            done
+            if [[ "$theme" == custom && "$ref_style" == powerline ]]; then
+                local -i powerline_separator_width=1
+                [[ "$configured_separator" == none ]] && powerline_separator_width=0
+                [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 6 + powerline_separator_width ))
+                for wide_name in "${(f)wide_names}"; do
+                    (( wide_width += ${#wide_name} + 2 + powerline_separator_width ))
+                done
+                [[ "$configured_separator" == none ]] && (( wide_width += 1 ))
+            else
+                local -i separator_width=4
+                [[ "$theme" == custom && "$configured_separator" == none ]] && separator_width=1
+                [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 4 + separator_width ))
+                for wide_name in "${(f)wide_names}"; do
+                    (( wide_width += ${#wide_name} + separator_width ))
+                done
+            fi
             (( wide_width + 1 > gutter_width )) && gutter_width=$(( wide_width + 1 ))
         done
     fi
     if [[ -n "$primary_oid" && "$head_oid" == "$primary_oid" ]]; then
         if [[ "$theme" == powerline ]]; then
             gutter_width=$(( ${#primary_name} + 11 ))
-        elif [[ "$theme" == wide ]]; then
+        elif [[ "$theme" == wide || "$theme" == custom ]]; then
             : # already sized from every visible local branch above
         else
             gutter_width=$(( ${#primary_name} + 9 ))
@@ -178,6 +251,7 @@ _surf_draw_log() {
     [[ "$theme" == hash ]] && gutter=''
 
     printf '%s\n' "${log_lines[@]}" | while IFS= read -r line; do
+        local is_head=false is_primary=false
         if [[ "$line" == *"$separator"* ]]; then
             local graph_and_oid="${line%%$separator*}"
             local rendered="${line#*$separator}"
@@ -187,24 +261,69 @@ _surf_draw_log() {
             local primary_node=$'\033[1;32m◆\033[0m'
             local head_graph="${graph/\*/$head_node}"
             local primary_graph="${graph/\*/$primary_node}"
-            local is_head=false is_primary=false label=HEAD arrow=' -> '
+            local label=HEAD arrow=' -> '
             [[ "$oid" == "$head_oid" ]] && is_head=true
             [[ -n "$primary_oid" && "$oid" == "$primary_oid" ]] && is_primary=true
+            local selected_node="$configured_node"
+            [[ "$is_head" == true ]] && selected_node="$configured_head_node"
+            if [[ "$theme" == custom && "$selected_node" == diamond ]]; then
+                local configured_graph_node=$'\033[1;97m◆\033[0m'
+                [[ -n "${wide_branches[$oid]}" ]] && configured_graph_node=$'\033[1;32m◆\033[0m'
+                [[ "$is_head" == true ]] && configured_graph_node=$'\033[1;96m◆\033[0m'
+                graph="${graph/\*/$configured_graph_node}"
+            fi
+            if [[ "$theme" == custom && -n "${custom_remotes[$oid]}" ]]; then
+                local remote_name right_separator_text=' <- '
+                [[ "$configured_right_separator" == none ]] && right_separator_text=' '
+                for remote_name in "${(f)custom_remotes[$oid]}"; do
+                    rendered+=$'\033[97m'"${right_separator_text}"$'\033[1;31m'"${remote_name}"$'\033[0m'
+                done
+            fi
             if [[ "$is_head" == true && "$is_primary" == true ]]; then
                 label="HEAD+${primary_name}"
             fi
 
-            if [[ "$theme" == wide && ( "$is_head" == true || -n "${wide_branches[$oid]}" ) ]]; then
+            if [[ ( "$theme" == wide || "$theme" == custom ) \
+                  && ( "$is_head" == true || -n "${wide_branches[$oid]}" ) ]]; then
                 local wide_prefix='' wide_visible=0 wide_branch=''
-                if [[ "$is_head" == true ]]; then
-                    wide_prefix=$'\033[1;96mHEAD\033[0;97m -> '
-                    (( wide_visible += 8 ))
+                if [[ "$theme" == custom && "$ref_style" == powerline ]]; then
+                    local head_powerline_end=$'\033[0;36m\033[0m'
+                    local branch_powerline_end=$'\033[0;32m\033[0m'
+                    local -i powerline_separator_width=1
+                    if [[ "$configured_separator" == none ]]; then
+                        head_powerline_end=$'\033[0m'
+                        branch_powerline_end=$'\033[0m'
+                        powerline_separator_width=0
+                    fi
+                    if [[ "$is_head" == true ]]; then
+                        wide_prefix=$'\033[1;30;46m HEAD '"${head_powerline_end}"
+                        (( wide_visible += 6 + powerline_separator_width ))
+                    fi
+                    for wide_branch in "${(f)wide_branches[$oid]}"; do
+                        [[ -n "$wide_branch" ]] || continue
+                        wide_prefix+=$'\033[1;30;42m '"${wide_branch}"$' '"${branch_powerline_end}"
+                        (( wide_visible += ${#wide_branch} + 2 + powerline_separator_width ))
+                    done
+                    if [[ "$configured_separator" == none ]]; then
+                        wide_prefix+=' '
+                        (( wide_visible += 1 ))
+                    fi
+                else
+                    local configured_arrow=' -> ' configured_arrow_width=4
+                    if [[ "$theme" == custom && "$configured_separator" == none ]]; then
+                        configured_arrow=' '
+                        configured_arrow_width=1
+                    fi
+                    if [[ "$is_head" == true ]]; then
+                        wide_prefix=$'\033[1;96mHEAD\033[0;97m'"${configured_arrow}"
+                        (( wide_visible += 4 + configured_arrow_width ))
+                    fi
+                    for wide_branch in "${(f)wide_branches[$oid]}"; do
+                        [[ -n "$wide_branch" ]] || continue
+                        wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
+                        (( wide_visible += ${#wide_branch} + configured_arrow_width ))
+                    done
                 fi
-                for wide_branch in "${(f)wide_branches[$oid]}"; do
-                    [[ -n "$wide_branch" ]] || continue
-                    wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m -> '
-                    (( wide_visible += ${#wide_branch} + 4 ))
-                done
                 printf -v padding '%*s' "$(( gutter_width - wide_visible ))" ''
                 line="${padding}${wide_prefix}"$'\033[0m'"${graph}${rendered}"
             elif [[ "$is_head" == true ]]; then
@@ -274,7 +393,7 @@ _surf_draw_log() {
                 local primary_padding=''
                 printf -v primary_padding '%*s' "$(( gutter_width - ${#primary_name} - 4 ))" ''
                 case "$theme" in
-                    hash|wide) line="${graph}${rendered}" ;;
+                    hash|wide|custom) line="${graph}${rendered}" ;;
                     powerline) line=$'\033[1;30;42m '"${primary_name}"$' \033[0;32m\033[0m '"${primary_padding}${graph}${rendered}" ;;
                     adaptive-diamond) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${primary_graph}${rendered}" ;;
                     *) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${graph}${rendered}" ;;
@@ -286,6 +405,14 @@ _surf_draw_log() {
             # Graph connector-only rows need the same gutter to preserve the
             # shape and alignment of merge lines.
             line="${gutter}${line}"
+        fi
+        if [[ "$theme" == custom && "$highlight_row" == yes \
+              && "${is_head:-false}" == true ]]; then
+            line=$'\033[48;5;23m'"${line}"
+            line=$(printf '%s' "$line" \
+                   | sed $'s/\033\\[[0-9;]*m/&\033[48;5;23m/g')
+            printf -v padding '%*s' "$cols" ''
+            line+="$padding"
         fi
         _surf_truncate_ansi "$line" "$cols"
         printf '%s\n' "$REPLY"
@@ -316,7 +443,7 @@ while true; do
                 | sed 's/^SURF_GIT_THEME=//')
     [[ -z "$cur_theme" ]] && cur_theme=adaptive-diamond
     case "$cur_theme" in
-        adaptive-diamond|pulse-arrow|arrow|wide|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
+        adaptive-diamond|pulse-arrow|arrow|wide|custom|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
         *) cur_theme=adaptive-diamond ;;
     esac
 

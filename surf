@@ -5,12 +5,14 @@
 #        surf --refresh [worktree-dir]
 #        surf --close   [worktree-dir]
 #        surf --theme <name> [worktree-dir]
+#        surf --configure [worktree-dir]
 #        surf --themes
 #   session-name  defaults to a stable per-worktree name when
 #                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 #   --refresh     signals an existing matching session to redraw and exits
 #   --theme       switches matching live sessions to a named git-log theme
+#   --configure   opens a live display-configuration TUI for a Surf session
 #   --themes      lists the available git-log themes
 #   --close       schedules teardown of the matching sessions and their kitty
 #                 tab, then exits immediately. Intended for a workmux
@@ -25,7 +27,7 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 
 MODE=""
 case "${1:-}" in
-    --refresh|--close|--theme|--themes) MODE="${1#--}" ;;
+    --refresh|--close|--theme|--themes|--configure) MODE="${1#--}" ;;
 esac
 
 SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow wide powerline row-yellow row-cyan arrow-hash hash)
@@ -84,6 +86,198 @@ _surf_sessions_for_dir() {
     done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
 }
 
+_surf_set_session_theme() {
+    local session="$1" theme="$2"
+    tmux set-environment -t "$session" SURF_GIT_THEME "$theme"
+    tmux set-environment -t "$session" SURF_REFRESH "$(date +%s%N)"
+}
+
+_surf_session_value() {
+    local session="$1" name="$2" fallback="$3" value
+    value=$(tmux show-environment -t "$session" "$name" 2>/dev/null \
+            | sed -n "s/^${name}=//p")
+    printf '%s' "${value:-$fallback}"
+}
+
+_surf_apply_bottom_config() {
+    local session="$1" theme="$2" style="$3" left_separator="$4"
+    local right_separator="$5" node="$6" head_node="$7" show_date="$8"
+    local show_author="$9" highlight_row="${10}"
+    tmux set-environment -t "$session" SURF_GIT_THEME "$theme"
+    tmux set-environment -t "$session" SURF_GIT_REF_STYLE "$style"
+    tmux set-environment -t "$session" SURF_GIT_SEPARATOR "$left_separator"
+    tmux set-environment -t "$session" SURF_GIT_RIGHT_SEPARATOR "$right_separator"
+    tmux set-environment -t "$session" SURF_GIT_NODE "$node"
+    tmux set-environment -t "$session" SURF_GIT_HEAD_NODE "$head_node"
+    tmux set-environment -t "$session" SURF_GIT_SHOW_DATE "$show_date"
+    tmux set-environment -t "$session" SURF_GIT_SHOW_AUTHOR "$show_author"
+    tmux set-environment -t "$session" SURF_GIT_HIGHLIGHT_ROW "$highlight_row"
+    tmux set-environment -t "$session" SURF_REFRESH "$(date +%s%N)"
+}
+
+_surf_configure() {
+    local session="$1" key rest accepted=0
+    local current_theme style left_separator right_separator node head_node
+    local show_date show_author highlight_row
+    local original_style original_left_separator original_right_separator original_node original_head_node
+    local original_show_date original_show_author
+    local original_highlight_row
+    local -i index=0 i
+
+    [[ -t 0 && -t 1 ]] || {
+        printf 'surf: --configure requires an interactive terminal\n' >&2
+        return 1
+    }
+
+    current_theme=$(_surf_session_value "$session" SURF_GIT_THEME "$SURF_GIT_THEME_DEFAULT")
+    style=$(_surf_session_value "$session" SURF_GIT_REF_STYLE text)
+    left_separator=$(_surf_session_value "$session" SURF_GIT_SEPARATOR arrow)
+    right_separator=$(_surf_session_value "$session" SURF_GIT_RIGHT_SEPARATOR arrow)
+    node=$(_surf_session_value "$session" SURF_GIT_NODE star)
+    head_node=$(_surf_session_value "$session" SURF_GIT_HEAD_NODE star)
+    show_date=$(_surf_session_value "$session" SURF_GIT_SHOW_DATE yes)
+    show_author=$(_surf_session_value "$session" SURF_GIT_SHOW_AUTHOR yes)
+    highlight_row=$(_surf_session_value "$session" SURF_GIT_HIGHLIGHT_ROW no)
+    original_style="$style"
+    original_left_separator="$left_separator"
+    original_right_separator="$right_separator"
+    original_node="$node"
+    original_head_node="$head_node"
+    original_show_date="$show_date"
+    original_show_author="$show_author"
+    original_highlight_row="$highlight_row"
+
+    _surf_apply_bottom_config "$session" custom "$style" "$left_separator" \
+        "$right_separator" "$node" "$head_node" "$show_date" "$show_author" "$highlight_row"
+
+    _surf_config_cleanup() {
+        if [[ "$accepted" -eq 0 ]]; then
+            _surf_apply_bottom_config "$session" "$current_theme" "$original_style" \
+                "$original_left_separator" "$original_right_separator" "$original_node" \
+                "$original_head_node" "$original_show_date" "$original_show_author" \
+                "$original_highlight_row" \
+                2>/dev/null || true
+        fi
+        printf '\033[?25h\033[?1049l'
+    }
+    trap _surf_config_cleanup EXIT
+    trap 'exit 130' INT TERM
+
+    _surf_config_display_value() {
+        case "$1:$2" in
+            left-separator:arrow) printf '%s' '->' ;;
+            right-separator:arrow) printf '%s' '<-' ;;
+            node:star) printf '%s' '*' ;;
+            node:diamond) printf '%s' '◆' ;;
+            date:yes|author:yes) printf '%s' show ;;
+            date:no|author:no) printf '%s' hide ;;
+            highlight:yes) printf '%s' on ;;
+            highlight:no) printf '%s' off ;;
+            *) printf '%s' "$2" ;;
+        esac
+    }
+
+    _surf_config_row() {
+        local row="$1" setting="$2" label="$3" current="$4" choice display
+        shift 4
+        if [[ "$row" -eq "$index" ]]; then
+            printf '      \033[1;36m›\033[0m %-24s' "$label"
+        else
+            printf '        %-24s' "$label"
+        fi
+        for choice in "$@"; do
+            display=$(_surf_config_display_value "$setting" "$choice")
+            if [[ "$choice" == "$current" && "$row" -eq "$index" ]]; then
+                printf ' \033[1;30;46m %-10s \033[0m' "$display"
+            elif [[ "$choice" == "$current" ]]; then
+                printf ' \033[1;36m[%-10s]\033[0m' "$display"
+            else
+                printf '  %-10s ' "$display"
+            fi
+        done
+        printf '\n'
+    }
+
+    _surf_cycle_value() {
+        local current="$1" direction="$2" candidate
+        local -a choices=("${@:3}")
+        local -i choice_index=0 i
+        for (( i = 0; i < ${#choices[@]}; i++ )); do
+            [[ "${choices[$i]}" == "$current" ]] && choice_index=$i
+        done
+        choice_index=$(( (choice_index + direction + ${#choices[@]}) % ${#choices[@]} ))
+        REPLY="${choices[$choice_index]}"
+    }
+
+    printf '\033[?1049h\033[?25l'
+    while true; do
+        printf '\033[H\033[2J'
+        printf 'Surf display configuration\n'
+        printf 'Session: %s\n\n' "$session"
+        printf '  TOP PANEL\n'
+        printf '    Configuration options coming later.\n\n'
+        printf '  MIDDLE PANEL\n'
+        printf '    Configuration options coming later.\n\n'
+        printf '  BOTTOM PANEL\n'
+        printf '    Configurable Git log\n\n'
+        _surf_config_row 0 style 'HEAD / branch style' "$style" text powerline
+        _surf_config_row 1 left-separator 'Left separator' "$left_separator" arrow none
+        _surf_config_row 2 right-separator 'Right separator' "$right_separator" arrow none
+        _surf_config_row 3 node 'Regular node' "$node" star diamond
+        _surf_config_row 4 node 'HEAD node' "$head_node" star diamond
+        _surf_config_row 5 date Date "$show_date" yes no
+        _surf_config_row 6 author Author "$show_author" yes no
+        _surf_config_row 7 highlight 'Highlight HEAD row' "$highlight_row" no yes
+        printf '\n  ↑/↓ select    ←/→ or Space change    Enter keep    q/Esc cancel\n'
+
+        IFS= read -rsn1 key || true
+        if [[ "$key" == $'\033' ]]; then
+            rest=''
+            IFS= read -rsn2 -t 0.05 rest || true
+            case "$rest" in
+                '[A') key=k ;;
+                '[B') key=j ;;
+                '[C') key=l ;;
+                '[D') key=h ;;
+                *) break ;;
+            esac
+        fi
+        case "$key" in
+            k)
+                index=$(( (index - 1 + 8) % 8 ))
+                ;;
+            j)
+                index=$(( (index + 1) % 8 ))
+                ;;
+            h|l|' ')
+                local direction=1
+                [[ "$key" == h ]] && direction=-1
+                case "$index" in
+                    0) _surf_cycle_value "$style" "$direction" text powerline; style="$REPLY" ;;
+                    1) _surf_cycle_value "$left_separator" "$direction" arrow none; left_separator="$REPLY" ;;
+                    2) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
+                    3) _surf_cycle_value "$node" "$direction" star diamond; node="$REPLY" ;;
+                    4) _surf_cycle_value "$head_node" "$direction" star diamond; head_node="$REPLY" ;;
+                    5) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
+                    6) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
+                    7) _surf_cycle_value "$highlight_row" "$direction" no yes; highlight_row="$REPLY" ;;
+                esac
+                _surf_apply_bottom_config "$session" custom "$style" "$left_separator" \
+                    "$right_separator" "$node" "$head_node" "$show_date" "$show_author" \
+                    "$highlight_row"
+                ;;
+            '')
+                accepted=1
+                break
+                ;;
+            q) break ;;
+            *) continue ;;
+        esac
+    done
+    _surf_config_cleanup
+    trap - EXIT INT TERM
+}
+
 if [[ -n "$MODE" ]]; then
     SESSION=$(_surf_session_for_dir "$START_DIR")
 elif [[ -n "${1:-}" ]]; then
@@ -131,6 +325,29 @@ if [[ "$MODE" == theme ]]; then
         exit 1
     }
     exit 0
+fi
+
+if [[ "$MODE" == configure ]]; then
+    CONFIG_SESSION=''
+    if [[ -n "${SURF_SESSION:-}" ]] && tmux has-session -t "$SURF_SESSION" 2>/dev/null; then
+        CONFIG_SESSION="$SURF_SESSION"
+    else
+        while IFS= read -r candidate; do
+            [[ -n "$candidate" ]] || continue
+            CONFIG_SESSION="$candidate"
+            break
+        done < <(_surf_sessions_for_dir "$START_DIR")
+        if [[ -z "$CONFIG_SESSION" && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+           && tmux has-session -t surf 2>/dev/null; then
+            CONFIG_SESSION=surf
+        fi
+    fi
+    [[ -n "$CONFIG_SESSION" ]] || {
+        printf 'surf: no matching live session for %s\n' "$START_DIR" >&2
+        exit 1
+    }
+    _surf_configure "$CONFIG_SESSION"
+    exit $?
 fi
 
 # Quote regex metacharacters so a path can be used as a kitty match expression.
