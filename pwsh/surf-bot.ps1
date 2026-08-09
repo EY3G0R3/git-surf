@@ -59,9 +59,11 @@ function Draw-GitLog {
 
     if ($useYadm) {
         # yadm covers $HOME recursively. A regular nested repository still wins.
-        $lines = yadm log --oneline --graph --decorate --all -n $rows --color=always 2>$null
+        $headOid = yadm rev-parse HEAD 2>$null
+        $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
     } else {
-        $lines = git -C $Dir log --oneline --graph --decorate --all -n $rows --color=always 2>$null
+        $headOid = git -C $Dir rev-parse HEAD 2>$null
+        $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
     }
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
@@ -69,6 +71,23 @@ function Draw-GitLog {
     }
 
     foreach ($l in ($lines | Select-Object -First $rows)) {
+        $separatorAt = $l.IndexOf([char]0x1f)
+        if ($separatorAt -ge 0) {
+            $graphAndOid = $l.Substring(0, $separatorAt)
+            $rendered = $l.Substring($separatorAt + 1)
+            $oidAt = $graphAndOid.Length - $headOid.Length
+            if ($oidAt -ge 0) {
+                $oid = $graphAndOid.Substring($oidAt)
+                $graph = $graphAndOid.Substring(0, $oidAt)
+                if ($oid -eq $headOid) {
+                    # Keep HEAD visible even when the right-hand ref decoration
+                    # falls beyond the edge of a narrow pane.
+                    $l = $graph + "`e[1;30;103m HEAD `e[0m " + $rendered
+                } else {
+                    $l = $graph + $rendered
+                }
+            }
+        }
         # Naive truncation to terminal width (ANSI codes count toward the limit,
         # same as cut -c in the Linux version)
         if ($l.Length -gt $cols) { $l = $l.Substring(0, $cols) }

@@ -44,6 +44,8 @@ _surf_truncate_ansi() {
 _surf_draw_log() {
     local dir="$1"
     local -a log_cmd
+    local head_oid
+    local separator=$'\x1f'
     # Query actual pane height each draw so resizes and rounding never mismatch
     local rows cols
     rows=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_height}" 2>/dev/null)
@@ -69,12 +71,29 @@ _surf_draw_log() {
         return
     fi
 
+    head_oid=$("${log_cmd[@]}" rev-parse HEAD 2>/dev/null)
+
     "${log_cmd[@]}" \
-        log --oneline --graph --decorate --all -n "$rows" \
+        log --pretty=format:'%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' \
+        --graph --all -n "$rows" \
         --color=always \
         2>/dev/null \
     | head -n "$rows" \
     | while IFS= read -r line; do
+        if [[ "$line" == *"$separator"* ]]; then
+            local graph_and_oid="${line%%$separator*}"
+            local rendered="${line#*$separator}"
+            local oid="${graph_and_oid[-${#head_oid},-1]}"
+            local graph="${graph_and_oid[1,-$(( ${#head_oid} + 1 ))]}"
+
+            if [[ "$oid" == "$head_oid" ]]; then
+                # Put the identifier before the subject so it remains visible
+                # even when the right-hand ref decoration is truncated.
+                line="${graph}"$'\033[1;30;103m HEAD \033[0m '"${rendered}"
+            else
+                line="${graph}${rendered}"
+            fi
+        fi
         _surf_truncate_ansi "$line" "$cols"
         printf '%s\n' "$REPLY"
       done
