@@ -34,9 +34,114 @@ esac
 
 SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow wide powerline row-yellow row-cyan arrow-hash hash)
 SURF_GIT_THEME_DEFAULT=adaptive-diamond
+SURF_CONFIG_FILE="${SURF_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config}"
+
+SURF_CONFIG_PRESENT=0
+SURF_CONFIG_REF_STYLE=text
+SURF_CONFIG_LEFT_SEPARATOR=arrow
+SURF_CONFIG_RIGHT_SEPARATOR=arrow
+SURF_CONFIG_REGULAR_NODE=star
+SURF_CONFIG_HEAD_NODE=star
+SURF_CONFIG_SHOW_DATE=yes
+SURF_CONFIG_SHOW_AUTHOR=yes
+SURF_CONFIG_HIGHLIGHT_HEAD_ROW=no
+
+_surf_load_config() {
+    local key value
+    [[ -f "$SURF_CONFIG_FILE" ]] || return 0
+
+    while IFS='=' read -r key value; do
+        value="${value%$'\r'}"
+        case "$key" in
+            bottom.ref_style)
+                [[ "$value" == text || "$value" == powerline ]] || continue
+                SURF_CONFIG_REF_STYLE="$value" ;;
+            bottom.left_separator)
+                [[ "$value" == arrow || "$value" == none ]] || continue
+                SURF_CONFIG_LEFT_SEPARATOR="$value" ;;
+            bottom.right_separator)
+                [[ "$value" == arrow || "$value" == none ]] || continue
+                SURF_CONFIG_RIGHT_SEPARATOR="$value" ;;
+            bottom.regular_node)
+                [[ "$value" == star || "$value" == diamond ]] || continue
+                SURF_CONFIG_REGULAR_NODE="$value" ;;
+            bottom.head_node)
+                [[ "$value" == star || "$value" == diamond ]] || continue
+                SURF_CONFIG_HEAD_NODE="$value" ;;
+            bottom.show_date)
+                [[ "$value" == yes || "$value" == no ]] || continue
+                SURF_CONFIG_SHOW_DATE="$value" ;;
+            bottom.show_author)
+                [[ "$value" == yes || "$value" == no ]] || continue
+                SURF_CONFIG_SHOW_AUTHOR="$value" ;;
+            bottom.highlight_head_row)
+                [[ "$value" == yes || "$value" == no ]] || continue
+                SURF_CONFIG_HIGHLIGHT_HEAD_ROW="$value" ;;
+            *) continue ;;
+        esac
+        SURF_CONFIG_PRESENT=1
+    done < "$SURF_CONFIG_FILE"
+}
+
+_surf_write_config() {
+    local style="$1" left_separator="$2" right_separator="$3"
+    local regular_node="$4" head_node="$5" show_date="$6" show_author="$7"
+    local highlight_head_row="$8" config_dir temporary source_file
+    config_dir="${SURF_CONFIG_FILE%/*}"
+    [[ "$config_dir" == "$SURF_CONFIG_FILE" ]] && config_dir=.
+    mkdir -p "$config_dir" || return 1
+    temporary=$(mktemp "$config_dir/.config.XXXXXX") || return 1
+    source_file=/dev/null
+    [[ -f "$SURF_CONFIG_FILE" ]] && source_file="$SURF_CONFIG_FILE"
+
+    if ! awk \
+        -v style="$style" \
+        -v left_separator="$left_separator" \
+        -v right_separator="$right_separator" \
+        -v regular_node="$regular_node" \
+        -v head_node="$head_node" \
+        -v show_date="$show_date" \
+        -v show_author="$show_author" \
+        -v highlight_head_row="$highlight_head_row" '
+        BEGIN {
+            known["version"] = 1
+            known["bottom.ref_style"] = 1
+            known["bottom.left_separator"] = 1
+            known["bottom.right_separator"] = 1
+            known["bottom.regular_node"] = 1
+            known["bottom.head_node"] = 1
+            known["bottom.show_date"] = 1
+            known["bottom.show_author"] = 1
+            known["bottom.highlight_head_row"] = 1
+        }
+        {
+            separator_at = index($0, "=")
+            key = separator_at ? substr($0, 1, separator_at - 1) : ""
+            if (!(key in known)) print
+        }
+        END {
+            print "version=1"
+            print "bottom.ref_style=" style
+            print "bottom.left_separator=" left_separator
+            print "bottom.right_separator=" right_separator
+            print "bottom.regular_node=" regular_node
+            print "bottom.head_node=" head_node
+            print "bottom.show_date=" show_date
+            print "bottom.show_author=" show_author
+            print "bottom.highlight_head_row=" highlight_head_row
+        }
+    ' "$source_file" > "$temporary"; then
+        rm -f "$temporary"
+        return 1
+    fi
+    if ! mv -f "$temporary" "$SURF_CONFIG_FILE"; then
+        rm -f "$temporary"
+        return 1
+    fi
+}
 
 _surf_print_help() {
-    cat <<'HELPEOF'
+    cat <<HELPEOF
 Usage:
   surf [session-name] [start-dir]
   surf --refresh [worktree-dir]
@@ -60,9 +165,12 @@ Options:
   --close            close matching sessions and their Kitty tab after the
                      worktree disappears
   --theme <name>     switch the bottom-panel Git log theme
-  --configure        interactively configure live display options
+  --configure        configure live display options and persistent defaults
   --themes           list available Git log theme names
   -h, --help         show this help and exit
+
+Configuration:
+  ${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config
 HELPEOF
 }
 
@@ -154,7 +262,7 @@ _surf_apply_bottom_config() {
 }
 
 _surf_configure() {
-    local session="$1" key rest accepted=0
+    local session="$1" key rest accepted=0 status_message=''
     local current_theme style left_separator right_separator node head_node
     local show_date show_author highlight_row
     local original_style original_left_separator original_right_separator original_node original_head_node
@@ -266,7 +374,8 @@ _surf_configure() {
         _surf_config_row 5 date Date "$show_date" yes no
         _surf_config_row 6 author Author "$show_author" yes no
         _surf_config_row 7 highlight 'Highlight HEAD row' "$highlight_row" no yes
-        printf '\n  ↑/↓ select    ←/→ or Space change    Enter keep    q/Esc cancel\n'
+        [[ -n "$status_message" ]] && printf '\n  \033[1;31m%s\033[0m\n' "$status_message"
+        printf '\n  ↑/↓ select    ←/→ or Space change    Enter save defaults    q/Esc cancel\n'
 
         IFS= read -rsn1 key || true
         if [[ "$key" == $'\033' ]]; then
@@ -305,8 +414,12 @@ _surf_configure() {
                     "$highlight_row"
                 ;;
             '')
-                accepted=1
-                break
+                if _surf_write_config "$style" "$left_separator" "$right_separator" \
+                    "$node" "$head_node" "$show_date" "$show_author" "$highlight_row"; then
+                    accepted=1
+                    break
+                fi
+                status_message="Could not write $SURF_CONFIG_FILE"
                 ;;
             q) break ;;
             *) continue ;;
@@ -456,6 +569,23 @@ if [[ "$MODE" == close ]]; then
     exit 0
 fi
 
+_surf_load_config
+if [[ -n "${SURF_GIT_THEME:-}" ]]; then
+    SURF_EFFECTIVE_GIT_THEME="$SURF_GIT_THEME"
+elif [[ "$SURF_CONFIG_PRESENT" -eq 1 ]]; then
+    SURF_EFFECTIVE_GIT_THEME=custom
+else
+    SURF_EFFECTIVE_GIT_THEME="$SURF_GIT_THEME_DEFAULT"
+fi
+SURF_EFFECTIVE_REF_STYLE="${SURF_GIT_REF_STYLE:-$SURF_CONFIG_REF_STYLE}"
+SURF_EFFECTIVE_LEFT_SEPARATOR="${SURF_GIT_SEPARATOR:-$SURF_CONFIG_LEFT_SEPARATOR}"
+SURF_EFFECTIVE_RIGHT_SEPARATOR="${SURF_GIT_RIGHT_SEPARATOR:-$SURF_CONFIG_RIGHT_SEPARATOR}"
+SURF_EFFECTIVE_REGULAR_NODE="${SURF_GIT_NODE:-$SURF_CONFIG_REGULAR_NODE}"
+SURF_EFFECTIVE_HEAD_NODE="${SURF_GIT_HEAD_NODE:-$SURF_CONFIG_HEAD_NODE}"
+SURF_EFFECTIVE_SHOW_DATE="${SURF_GIT_SHOW_DATE:-$SURF_CONFIG_SHOW_DATE}"
+SURF_EFFECTIVE_SHOW_AUTHOR="${SURF_GIT_SHOW_AUTHOR:-$SURF_CONFIG_SHOW_AUTHOR}"
+SURF_EFFECTIVE_HIGHLIGHT_HEAD_ROW="${SURF_GIT_HIGHLIGHT_ROW:-$SURF_CONFIG_HIGHLIGHT_HEAD_ROW}"
+
 # Resolve symlink installs (for example ~/.local/bin/surf) before locating the
 # companion zsh scripts. readlink -f is not available on macOS, so follow the
 # chain portably and resolve relative link targets against their link directory.
@@ -561,8 +691,15 @@ tmux set-environment -t "$SESSION" SURF_VERSION   "$SURF_VERSION"
 tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
 tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
-tmux set-environment -t "$SESSION" SURF_GIT_THEME \
-    "${SURF_GIT_THEME:-$SURF_GIT_THEME_DEFAULT}"
+tmux set-environment -t "$SESSION" SURF_GIT_THEME "$SURF_EFFECTIVE_GIT_THEME"
+tmux set-environment -t "$SESSION" SURF_GIT_REF_STYLE "$SURF_EFFECTIVE_REF_STYLE"
+tmux set-environment -t "$SESSION" SURF_GIT_SEPARATOR "$SURF_EFFECTIVE_LEFT_SEPARATOR"
+tmux set-environment -t "$SESSION" SURF_GIT_RIGHT_SEPARATOR "$SURF_EFFECTIVE_RIGHT_SEPARATOR"
+tmux set-environment -t "$SESSION" SURF_GIT_NODE "$SURF_EFFECTIVE_REGULAR_NODE"
+tmux set-environment -t "$SESSION" SURF_GIT_HEAD_NODE "$SURF_EFFECTIVE_HEAD_NODE"
+tmux set-environment -t "$SESSION" SURF_GIT_SHOW_DATE "$SURF_EFFECTIVE_SHOW_DATE"
+tmux set-environment -t "$SESSION" SURF_GIT_SHOW_AUTHOR "$SURF_EFFECTIVE_SHOW_AUTHOR"
+tmux set-environment -t "$SESSION" SURF_GIT_HIGHLIGHT_ROW "$SURF_EFFECTIVE_HIGHLIGHT_HEAD_ROW"
 _surf_stamp_kitty
 
 # The interactive middle pane owns the session. Closing it should not leave
@@ -588,7 +725,7 @@ export SURF_DIR="$SURF_DIR"
 export SURF_GIT_LINES="$GIT_LOG_LINES"
 export SURF_START_DIR="$START_DIR"
 export SURF_PWD="$START_DIR"
-export SURF_GIT_THEME="${SURF_GIT_THEME:-$SURF_GIT_THEME_DEFAULT}"
+export SURF_GIT_THEME="$SURF_EFFECTIVE_GIT_THEME"
 export SURF_ROLE="$role"
 export SURF_SOURCED=1
 cd -- $quoted_start_dir

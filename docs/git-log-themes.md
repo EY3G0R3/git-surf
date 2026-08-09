@@ -18,11 +18,18 @@ surf --configure
 The configuration screen previews independent bottom-panel options immediately:
 HEAD/branch label style, left and mirrored remote-ref separators, separate
 regular and HEAD node characters, date and author visibility, and full-row HEAD
-highlighting. Press Enter to keep the settings, or `q`/Escape to restore the
-previous display. The choice is session-scoped, like `surf --theme`; top- and
-middle-panel sections are present as placeholders for future display options.
-Each row shows every available value; use up/down to choose a setting and
-left/right to move the highlighted value.
+highlighting. Press Enter to save the settings as defaults and keep them in the
+current session, or `q`/Escape to restore the previous display without writing.
+Top- and middle-panel sections are present as placeholders for future display
+options. Each row shows every available value; use up/down to choose a setting
+and left/right to move the highlighted value.
+
+Persistent settings live in
+`${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config`. Surf validates known values
+rather than sourcing the file as shell code, preserves unknown keys when the
+TUI updates it, and writes changes atomically. New sessions use the saved
+bottom-panel configuration unless explicit `SURF_GIT_*` environment values
+override it. Named `surf --theme` changes remain session-scoped.
 
 Switch every live Surf session for a worktree:
 
