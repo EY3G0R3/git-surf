@@ -8,8 +8,8 @@
 #        surf --configure [worktree-dir]
 #        surf --themes
 #        surf --help
-#   session-name  defaults to a stable per-worktree name when
-#                 $WM_WORKTREE_PATH is set, otherwise "surf"
+#   session-name  defaults to a stable per-worktree name under workmux,
+#                 otherwise a terminal-scoped name when identity is available
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 #   --refresh     signals an existing matching session to redraw and exits
 #   --theme       switches matching live sessions to a named git-log theme
@@ -154,8 +154,8 @@ Usage:
 Launch Surf without an option to create or attach to its tmux layout.
 
 Arguments:
-  session-name       tmux session name; defaults to a stable worktree name,
-                     or "surf" outside workmux
+  session-name       tmux session name; defaults to a stable worktree name
+                     under workmux, otherwise a terminal-scoped name
   start-dir          initial directory; defaults to WM_WORKTREE_PATH or PWD
   worktree-dir       live Surf session to target; defaults to the current
                      workmux worktree or the legacy "surf" session
@@ -210,6 +210,39 @@ _surf_session_for_dir() {
     name=$(basename "$1")
     id=$(printf '%s' "$1" | cksum | awk '{print $1}')
     printf 'surf-%s-%s' "$name" "$id"
+}
+
+# Give independent terminal windows independent tmux sessions. Dedicated
+# terminal IDs survive shell changes within a window; hashing keeps opaque IDs
+# and fallback TTY paths safe for use in tmux session names.
+_surf_hashed_terminal_session() {
+    local kind="$1" value="$2" id
+    id=$(printf '%s' "$value" | cksum | awk '{print $1}')
+    printf 'surf-%s-%s' "$kind" "$id"
+}
+
+_surf_default_session() {
+    local terminal_tty
+    if [[ -n "${KITTY_WINDOW_ID:-}" ]]; then
+        if [[ "$KITTY_WINDOW_ID" != *[![:alnum:]_-]* ]]; then
+            printf 'surf-kitty-%s' "$KITTY_WINDOW_ID"
+        else
+            _surf_hashed_terminal_session kitty "$KITTY_WINDOW_ID"
+        fi
+    elif [[ -n "${ITERM_SESSION_ID:-}" ]]; then
+        _surf_hashed_terminal_session iterm "$ITERM_SESSION_ID"
+    elif [[ -n "${TERM_SESSION_ID:-}" ]]; then
+        _surf_hashed_terminal_session terminal "$TERM_SESSION_ID"
+    elif [[ -n "${WEZTERM_PANE:-}" ]]; then
+        _surf_hashed_terminal_session wezterm "$WEZTERM_PANE"
+    else
+        terminal_tty=$(tty 2>/dev/null) || terminal_tty=''
+        if [[ -n "$terminal_tty" && "$terminal_tty" != 'not a tty' ]]; then
+            _surf_hashed_terminal_session tty "$terminal_tty"
+        else
+            printf 'surf'
+        fi
+    fi
 }
 
 # Every live session belonging to a worktree path, one per line. Custom-named
@@ -429,6 +462,7 @@ _surf_configure() {
     trap - EXIT INT TERM
 }
 
+DEFAULT_SESSION=$(_surf_default_session)
 if [[ -n "$MODE" ]]; then
     SESSION=$(_surf_session_for_dir "$START_DIR")
 elif [[ -n "${1:-}" ]]; then
@@ -436,7 +470,7 @@ elif [[ -n "${1:-}" ]]; then
 elif [[ -n "${WM_WORKTREE_PATH:-}" ]]; then
     SESSION=$(_surf_session_for_dir "$START_DIR")
 else
-    SESSION=surf
+    SESSION="$DEFAULT_SESSION"
 fi
 
 if [[ "$MODE" == refresh ]]; then
@@ -447,10 +481,13 @@ if [[ "$MODE" == refresh ]]; then
         refreshed=1
     done < <(_surf_sessions_for_dir "$START_DIR")
 
-    # Preserve refresh behavior for a non-worktree Surf session created with
-    # the historical default name.
+    # Preserve no-path refresh behavior for the terminal-scoped default and
+    # for sessions created with the historical "surf" name.
     if [[ "$refreshed" -eq 0 && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
-       && tmux has-session -t surf 2>/dev/null; then
+       && tmux has-session -t "$DEFAULT_SESSION" 2>/dev/null; then
+        tmux set-environment -t "$DEFAULT_SESSION" SURF_REFRESH "$(date +%s%N)"
+    elif [[ "$refreshed" -eq 0 && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+         && tmux has-session -t surf 2>/dev/null; then
         tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
     fi
     exit 0
@@ -466,7 +503,12 @@ if [[ "$MODE" == theme ]]; then
     done < <(_surf_sessions_for_dir "$START_DIR")
 
     if [[ "$switched" -eq 0 && -z "${3:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
-       && tmux has-session -t surf 2>/dev/null; then
+       && tmux has-session -t "$DEFAULT_SESSION" 2>/dev/null; then
+        tmux set-environment -t "$DEFAULT_SESSION" SURF_GIT_THEME "$THEME"
+        tmux set-environment -t "$DEFAULT_SESSION" SURF_REFRESH "$(date +%s%N)"
+        switched=1
+    elif [[ "$switched" -eq 0 && -z "${3:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+         && tmux has-session -t surf 2>/dev/null; then
         tmux set-environment -t surf SURF_GIT_THEME "$THEME"
         tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
         switched=1
@@ -489,7 +531,10 @@ if [[ "$MODE" == configure ]]; then
             break
         done < <(_surf_sessions_for_dir "$START_DIR")
         if [[ -z "$CONFIG_SESSION" && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
-           && tmux has-session -t surf 2>/dev/null; then
+           && tmux has-session -t "$DEFAULT_SESSION" 2>/dev/null; then
+            CONFIG_SESSION="$DEFAULT_SESSION"
+        elif [[ -z "$CONFIG_SESSION" && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+             && tmux has-session -t surf 2>/dev/null; then
             CONFIG_SESSION=surf
         fi
     fi
