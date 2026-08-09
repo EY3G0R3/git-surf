@@ -15,6 +15,37 @@ shell. Surf redraws after user activity and otherwise polls session state every
 A rewrite should therefore be justified primarily by maintainability and
 testability, not expected rendering speed.
 
+## TODO: extract a standalone smartlog tool
+
+Separate the Git query, commit/ref model, layout, and ANSI rendering currently
+embedded in `surf-bot.zsh` into a standalone configurable command—effectively a
+Surf-flavored wrapper around `git log --graph`, or "smartlog" tool. A tentative
+name is `surf-smartlog`.
+
+The command should be useful without tmux or Kitty:
+
+```sh
+surf-smartlog [--config path] [--width columns] [repository]
+surf-smartlog --watch [repository]
+```
+
+The default mode should render one snapshot to standard output so it composes
+with ordinary terminal workflows. Watch mode should redraw on repository
+changes or an explicit refresh signal and serve as the process Surf launches in
+its bottom pane. The core renderer must not query tmux directly; a thin Surf
+adapter should translate pane dimensions and session state into command options
+or environment values.
+
+Reuse the persistent `bottom.*` configuration keys for ref styles, separators,
+nodes, metadata fields, and row highlighting. Command-line flags should override
+the config file, making the tool independently scriptable while preserving the
+same output users configured through `surf --configure`.
+
+Extraction should precede any Python or Rust rewrite. First establish the CLI
+and testable renderer boundary while behavior is still defined by the existing
+zsh implementation; the implementation language can then change without
+coupling the smartlog interface to Surf's pane orchestration.
+
 ## Python
 
 Python is the preferred next implementation if the renderer outgrows zsh. It
