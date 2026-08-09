@@ -273,7 +273,7 @@ _surf_draw_log() {
                 graph="${graph/\*/$configured_graph_node}"
             fi
             if [[ "$theme" == custom && -n "${custom_remotes[$oid]}" ]]; then
-                local remote_name right_separator_text=' <- '
+                local remote_name='' right_separator_text=' <- '
                 [[ "$configured_right_separator" == none ]] && right_separator_text=' '
                 for remote_name in "${(f)custom_remotes[$oid]}"; do
                     rendered+=$'\033[97m'"${right_separator_text}"$'\033[1;31m'"${remote_name}"$'\033[0m'
