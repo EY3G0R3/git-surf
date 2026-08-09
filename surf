@@ -7,6 +7,7 @@
 #        surf --theme <name> [worktree-dir]
 #        surf --configure [worktree-dir]
 #        surf --themes
+#        surf --help
 #   session-name  defaults to a stable per-worktree name when
 #                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
@@ -28,10 +29,47 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 MODE=""
 case "${1:-}" in
     --refresh|--close|--theme|--themes|--configure) MODE="${1#--}" ;;
+    --help|-h) MODE=help ;;
 esac
 
 SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow wide powerline row-yellow row-cyan arrow-hash hash)
 SURF_GIT_THEME_DEFAULT=adaptive-diamond
+
+_surf_print_help() {
+    cat <<'HELPEOF'
+Usage:
+  surf [session-name] [start-dir]
+  surf --refresh [worktree-dir]
+  surf --close [worktree-dir]
+  surf --theme <name> [worktree-dir]
+  surf --configure [worktree-dir]
+  surf --themes
+  surf --help
+
+Launch Surf without an option to create or attach to its tmux layout.
+
+Arguments:
+  session-name       tmux session name; defaults to a stable worktree name,
+                     or "surf" outside workmux
+  start-dir          initial directory; defaults to WM_WORKTREE_PATH or PWD
+  worktree-dir       live Surf session to target; defaults to the current
+                     workmux worktree or the legacy "surf" session
+
+Options:
+  --refresh          redraw matching live panes
+  --close            close matching sessions and their Kitty tab after the
+                     worktree disappears
+  --theme <name>     switch the bottom-panel Git log theme
+  --configure        interactively configure live display options
+  --themes           list available Git log theme names
+  -h, --help         show this help and exit
+HELPEOF
+}
+
+if [[ "$MODE" == help ]]; then
+    _surf_print_help
+    exit 0
+fi
 
 _surf_valid_theme() {
     local candidate="$1" theme
