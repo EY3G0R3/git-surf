@@ -59,6 +59,8 @@ _surf_draw_log() {
     local theme="${2:-adaptive-diamond}"
     local pulse="${3:-none}"
     local -a log_cmd
+    local -a log_lines decoration_args
+    local -A wide_branches
     local head_oid head_short primary_oid='' primary_name=''
     local separator=$'\x1f'
     # Query actual pane height each draw so resizes and rounding never mismatch
@@ -124,13 +126,50 @@ _surf_draw_log() {
         done
     fi
 
+    [[ "$theme" == wide ]] && decoration_args=(--decorate-refs=refs/remotes --decorate-refs=refs/tags)
+    log_lines=("${(@f)$("${log_cmd[@]}" \
+        log --pretty=format:'%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' \
+        --graph --all -n "$rows" \
+        --color=always "${decoration_args[@]}" \
+        2>/dev/null)}")
+    log_lines=("${log_lines[@]:0:$rows}")
+
     local gutter_width=8 gutter='        '
     if [[ -n "$primary_name" ]]; then
         (( ${#primary_name} + 4 > gutter_width )) && gutter_width=$(( ${#primary_name} + 4 ))
     fi
+    if [[ "$theme" == wide ]]; then
+        gutter_width=1
+        local ref_line ref_oid ref_name visible_line
+        while IFS= read -r ref_line; do
+            ref_oid="${ref_line%% *}"
+            ref_name="${ref_line#* }"
+            for visible_line in "${log_lines[@]}"; do
+                [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
+                if [[ -n "${wide_branches[$ref_oid]}" ]]; then
+                    wide_branches[$ref_oid]+=$'\n'"${ref_name}"
+                else
+                    wide_branches[$ref_oid]="$ref_name"
+                fi
+                break
+            done
+        done < <("${log_cmd[@]}" for-each-ref --format='%(objectname) %(refname:short)' refs/heads 2>/dev/null)
+
+        local wide_oid wide_names wide_width wide_name
+        for wide_oid wide_names in "${(@kv)wide_branches}"; do
+            wide_width=0
+            [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 8 ))
+            for wide_name in "${(f)wide_names}"; do
+                (( wide_width += ${#wide_name} + 4 ))
+            done
+            (( wide_width + 1 > gutter_width )) && gutter_width=$(( wide_width + 1 ))
+        done
+    fi
     if [[ -n "$primary_oid" && "$head_oid" == "$primary_oid" ]]; then
         if [[ "$theme" == powerline ]]; then
             gutter_width=$(( ${#primary_name} + 11 ))
+        elif [[ "$theme" == wide ]]; then
+            : # already sized from every visible local branch above
         else
             gutter_width=$(( ${#primary_name} + 9 ))
         fi
@@ -138,13 +177,7 @@ _surf_draw_log() {
     printf -v gutter '%*s' "$gutter_width" ''
     [[ "$theme" == hash ]] && gutter=''
 
-    "${log_cmd[@]}" \
-        log --pretty=format:'%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' \
-        --graph --all -n "$rows" \
-        --color=always \
-        2>/dev/null \
-    | head -n "$rows" \
-    | while IFS= read -r line; do
+    printf '%s\n' "${log_lines[@]}" | while IFS= read -r line; do
         if [[ "$line" == *"$separator"* ]]; then
             local graph_and_oid="${line%%$separator*}"
             local rendered="${line#*$separator}"
@@ -161,7 +194,20 @@ _surf_draw_log() {
                 label="HEAD+${primary_name}"
             fi
 
-            if [[ "$is_head" == true ]]; then
+            if [[ "$theme" == wide && ( "$is_head" == true || -n "${wide_branches[$oid]}" ) ]]; then
+                local wide_prefix='' wide_visible=0 wide_branch=''
+                if [[ "$is_head" == true ]]; then
+                    wide_prefix=$'\033[1;96mHEAD\033[0;97m -> '
+                    (( wide_visible += 8 ))
+                fi
+                for wide_branch in "${(f)wide_branches[$oid]}"; do
+                    [[ -n "$wide_branch" ]] || continue
+                    wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m -> '
+                    (( wide_visible += ${#wide_branch} + 4 ))
+                done
+                printf -v padding '%*s' "$(( gutter_width - wide_visible ))" ''
+                line="${padding}${wide_prefix}"$'\033[0m'"${graph}${rendered}"
+            elif [[ "$is_head" == true ]]; then
                 local plain='' padding='' cyan_reset=$'\033[0;48;5;23m'
                 local label_padding=''
                 printf -v label_padding '%*s' "$(( gutter_width - ${#label} - 4 ))" ''
@@ -228,7 +274,7 @@ _surf_draw_log() {
                 local primary_padding=''
                 printf -v primary_padding '%*s' "$(( gutter_width - ${#primary_name} - 4 ))" ''
                 case "$theme" in
-                    hash) line="${graph}${rendered}" ;;
+                    hash|wide) line="${graph}${rendered}" ;;
                     powerline) line=$'\033[1;30;42m '"${primary_name}"$' \033[0;32m\033[0m '"${primary_padding}${graph}${rendered}" ;;
                     adaptive-diamond) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${primary_graph}${rendered}" ;;
                     *) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${graph}${rendered}" ;;
@@ -270,7 +316,7 @@ while true; do
                 | sed 's/^SURF_GIT_THEME=//')
     [[ -z "$cur_theme" ]] && cur_theme=adaptive-diamond
     case "$cur_theme" in
-        adaptive-diamond|pulse-arrow|arrow|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
+        adaptive-diamond|pulse-arrow|arrow|wide|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
         *) cur_theme=adaptive-diamond ;;
     esac
 

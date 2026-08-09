@@ -84,24 +84,52 @@ function Draw-GitLog {
         return
     }
 
+    $decorationArgs = if ($Theme -eq "wide") {
+        @("--decorate-refs=refs/remotes", "--decorate-refs=refs/tags")
+    } else { @() }
     if ($useYadm) {
         # yadm covers $HOME recursively. A regular nested repository still wins.
         $headOid = yadm rev-parse HEAD 2>$null
         $headShort = yadm rev-parse --short HEAD 2>$null
-        $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
+        $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always @decorationArgs 2>$null
     } else {
         $headOid = git -C $Dir rev-parse HEAD 2>$null
         $headShort = git -C $Dir rev-parse --short HEAD 2>$null
-        $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always 2>$null
+        $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always @decorationArgs 2>$null
     }
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
         return
     }
+    # Git's -n limits commits, but merge connectors can add physical rows.
+    # Cap those rows before sizing the visible-branch gutter.
+    $lines = @($lines | Select-Object -First $rows)
 
     function Invoke-RepoGit {
         param([string[]]$Arguments)
         if ($useYadm) { & yadm @Arguments } else { & git -C $Dir @Arguments }
+    }
+
+    $wideBranches = @{}
+    if ($Theme -eq "wide") {
+        $localRefs = Invoke-RepoGit @("for-each-ref", "--format=%(objectname) %(refname:short)",
+            "refs/heads") 2>$null
+        foreach ($refLine in $localRefs) {
+            $spaceAt = $refLine.IndexOf(' ')
+            if ($spaceAt -lt 1) { continue }
+            $refOid = $refLine.Substring(0, $spaceAt)
+            $refName = $refLine.Substring($spaceAt + 1)
+            $isVisible = $false
+            foreach ($visibleLine in $lines) {
+                if ($visibleLine.Contains($refOid + [char]0x1f)) {
+                    $isVisible = $true
+                    break
+                }
+            }
+            if ($isVisible) {
+                $wideBranches[$refOid] = @($wideBranches[$refOid]) + $refName
+            }
+        }
     }
 
     $primaryOid = $null
@@ -150,9 +178,21 @@ function Draw-GitLog {
     if ($primaryName) {
         $gutterWidth = [Math]::Max($gutterWidth, $primaryName.Length + 4)
     }
+    if ($Theme -eq "wide") {
+        $gutterWidth = 1
+        foreach ($entry in $wideBranches.GetEnumerator()) {
+            $wideWidth = if ($entry.Key -eq $headOid) { 8 } else { 0 }
+            foreach ($branchName in $entry.Value) {
+                $wideWidth += $branchName.Length + 4
+            }
+            $gutterWidth = [Math]::Max($gutterWidth, $wideWidth + 1)
+        }
+    }
     if ($primaryOid -and $headOid -eq $primaryOid) {
         $gutterWidth = if ($Theme -eq "powerline") {
             $primaryName.Length + 11
+        } elseif ($Theme -eq "wide") {
+            $gutterWidth
         } else {
             $primaryName.Length + 9
         }
@@ -181,7 +221,21 @@ function Draw-GitLog {
                 }
                 $isHead = $oid -eq $headOid
                 $isPrimary = $primaryOid -and $oid -eq $primaryOid
-                if ($isHead) {
+                if ($Theme -eq "wide" -and
+                        ($isHead -or $wideBranches.ContainsKey($oid))) {
+                    $widePrefix = ""
+                    $wideVisible = 0
+                    if ($isHead) {
+                        $widePrefix = "`e[1;96mHEAD`e[0;97m -> "
+                        $wideVisible += 8
+                    }
+                    foreach ($branchName in @($wideBranches[$oid])) {
+                        $widePrefix += "`e[1;32m$branchName`e[0;97m -> "
+                        $wideVisible += $branchName.Length + 4
+                    }
+                    $widePadding = " " * ($gutterWidth - $wideVisible)
+                    $l = $widePadding + $widePrefix + "`e[0m" + $graph + $rendered
+                } elseif ($isHead) {
                     $label = if ($isPrimary) { "HEAD+$primaryName" } else { "HEAD" }
                     $arrow = " -> "
                     $labelPadding = " " * ($gutterWidth - $label.Length - 4)
@@ -263,7 +317,7 @@ function Draw-GitLog {
                     }
                 } elseif ($primaryOid -and $oid -eq $primaryOid) {
                     $primaryPadding = " " * ($gutterWidth - $primaryName.Length - 4)
-                    if ($Theme -eq "hash") {
+                    if ($Theme -eq "hash" -or $Theme -eq "wide") {
                         $l = $graph + $rendered
                     } elseif ($Theme -eq "powerline") {
                         $l = "`e[1;30;42m $primaryName `e[0;32m`e[0m " +

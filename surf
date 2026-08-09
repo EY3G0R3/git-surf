@@ -28,7 +28,7 @@ case "${1:-}" in
     --refresh|--close|--theme|--themes) MODE="${1#--}" ;;
 esac
 
-SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow powerline row-yellow row-cyan arrow-hash hash)
+SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow wide powerline row-yellow row-cyan arrow-hash hash)
 SURF_GIT_THEME_DEFAULT=adaptive-diamond
 
 _surf_valid_theme() {
