@@ -1,7 +1,9 @@
 #!/usr/bin/env pwsh
 # surf.ps1 — launch the git-surf Windows Terminal layout
 #
-# Usage: .\surf.ps1 [[-Session] <name>] [[-StartDir] <path>]
+# Usage: .\surf.ps1 [[-Session] <name>] [[-StartDir] <path>] [[-Theme] <name>]
+#        .\surf.ps1 -ListThemes
+#        .\surf.ps1 -SetTheme -Theme <name> [[-Session] <name>]
 #   Session   defaults to "surf"
 #   StartDir  defaults to current directory
 #
@@ -9,10 +11,30 @@
 
 param(
     [string]$Session  = "surf",
-    [string]$StartDir = $PWD.Path
+    [string]$StartDir = $PWD.Path,
+    [ValidateSet("adaptive-diamond", "pulse-arrow", "arrow", "powerline",
+        "row-yellow", "row-cyan", "arrow-hash", "hash")]
+    [string]$Theme = "adaptive-diamond",
+    [switch]$ListThemes,
+    [switch]$SetTheme
 )
 
 $ErrorActionPreference = 'Stop'
+$Themes = @("adaptive-diamond", "pulse-arrow", "arrow", "powerline",
+    "row-yellow", "row-cyan", "arrow-hash", "hash")
+
+if ($ListThemes) {
+    $Themes
+    exit 0
+}
+
+$StateDir = Join-Path $env:TEMP "surf-$Session"
+if ($SetTheme) {
+    New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+    $Theme | Set-Content (Join-Path $StateDir "theme.txt") -Encoding UTF8
+    New-Item -ItemType File -Path (Join-Path $StateDir "refresh.flag") -Force | Out-Null
+    exit 0
+}
 
 if (-not (Get-Command wt.exe -ErrorAction SilentlyContinue)) {
     Write-Error "Windows Terminal (wt.exe) is required. Install from the Microsoft Store or https://aka.ms/terminal"
@@ -23,11 +45,11 @@ $SurfDir = $PSScriptRoot
 $PwshExe = (Get-Command pwsh -ErrorAction Stop).Source
 
 # ── Per-session IPC directory ──────────────────────────────────────────────
-$StateDir = Join-Path $env:TEMP "surf-$Session"
 New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 
 # Seed shared state
 $StartDir | Set-Content (Join-Path $StateDir "pwd.txt") -Encoding UTF8
+$Theme | Set-Content (Join-Path $StateDir "theme.txt") -Encoding UTF8
 
 # ── Pass session state to child processes via env vars ─────────────────────
 # wt.exe and the pwsh it spawns inherit these from the current process.

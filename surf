@@ -4,10 +4,14 @@
 # Usage: surf [session-name] [start-dir]
 #        surf --refresh [worktree-dir]
 #        surf --close   [worktree-dir]
+#        surf --theme <name> [worktree-dir]
+#        surf --themes
 #   session-name  defaults to a stable per-worktree name when
 #                 $WM_WORKTREE_PATH is set, otherwise "surf"
 #   start-dir     defaults to $WM_WORKTREE_PATH when set, otherwise $PWD
 #   --refresh     signals an existing matching session to redraw and exits
+#   --theme       switches matching live sessions to a named git-log theme
+#   --themes      lists the available git-log themes
 #   --close       schedules teardown of the matching sessions and their kitty
 #                 tab, then exits immediately. Intended for a workmux
 #                 pre_remove hook; see docs/workmux-kitty-tab-close.md.
@@ -21,10 +25,36 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 
 MODE=""
 case "${1:-}" in
-    --refresh|--close) MODE="${1#--}" ;;
+    --refresh|--close|--theme|--themes) MODE="${1#--}" ;;
 esac
 
-START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
+SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow powerline row-yellow row-cyan arrow-hash hash)
+SURF_GIT_THEME_DEFAULT=adaptive-diamond
+
+_surf_valid_theme() {
+    local candidate="$1" theme
+    for theme in "${SURF_GIT_THEMES[@]}"; do
+        [[ "$candidate" == "$theme" ]] && return 0
+    done
+    return 1
+}
+
+if [[ "$MODE" == themes ]]; then
+    printf '%s\n' "${SURF_GIT_THEMES[@]}"
+    exit 0
+fi
+
+if [[ "$MODE" == theme ]]; then
+    THEME="${2:-}"
+    if ! _surf_valid_theme "$THEME"; then
+        printf 'surf: unknown theme: %s\n' "${THEME:-<missing>}" >&2
+        printf 'available themes: %s\n' "${SURF_GIT_THEMES[*]}" >&2
+        exit 2
+    fi
+    START_DIR="${3:-${WM_WORKTREE_PATH:-$PWD}}"
+else
+    START_DIR="${2:-${WM_WORKTREE_PATH:-$PWD}}"
+fi
 
 # The stable session name for a worktree path.
 _surf_session_for_dir() {
@@ -78,6 +108,28 @@ if [[ "$MODE" == refresh ]]; then
        && tmux has-session -t surf 2>/dev/null; then
         tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
     fi
+    exit 0
+fi
+
+if [[ "$MODE" == theme ]]; then
+    switched=0
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        tmux set-environment -t "$candidate" SURF_GIT_THEME "$THEME"
+        tmux set-environment -t "$candidate" SURF_REFRESH "$(date +%s%N)"
+        switched=1
+    done < <(_surf_sessions_for_dir "$START_DIR")
+
+    if [[ "$switched" -eq 0 && -z "${3:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
+       && tmux has-session -t surf 2>/dev/null; then
+        tmux set-environment -t surf SURF_GIT_THEME "$THEME"
+        tmux set-environment -t surf SURF_REFRESH "$(date +%s%N)"
+        switched=1
+    fi
+    [[ "$switched" -eq 1 ]] || {
+        printf 'surf: no matching live session for %s\n' "$START_DIR" >&2
+        exit 1
+    }
     exit 0
 fi
 
@@ -254,6 +306,8 @@ tmux set-environment -t "$SESSION" SURF_VERSION   "$SURF_VERSION"
 tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
 tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
+tmux set-environment -t "$SESSION" SURF_GIT_THEME \
+    "${SURF_GIT_THEME:-$SURF_GIT_THEME_DEFAULT}"
 _surf_stamp_kitty
 
 # The interactive middle pane owns the session. Closing it should not leave
@@ -279,6 +333,7 @@ export SURF_DIR="$SURF_DIR"
 export SURF_GIT_LINES="$GIT_LOG_LINES"
 export SURF_START_DIR="$START_DIR"
 export SURF_PWD="$START_DIR"
+export SURF_GIT_THEME="${SURF_GIT_THEME:-$SURF_GIT_THEME_DEFAULT}"
 export SURF_ROLE="$role"
 export SURF_SOURCED=1
 cd -- $quoted_start_dir
