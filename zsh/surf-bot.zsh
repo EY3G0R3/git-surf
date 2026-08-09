@@ -172,7 +172,7 @@ _surf_draw_log() {
     pretty+=' %C(auto)%D%C(reset)'
     log_lines=("${(@f)$("${log_cmd[@]}" \
         log "--pretty=format:${pretty}" \
-        --graph --all -n "$rows" \
+        --graph --all --date-order -n "$rows" \
         --color=always "${decoration_args[@]}" \
         2>/dev/null)}")
     log_lines=("${log_lines[@]:0:$rows}")

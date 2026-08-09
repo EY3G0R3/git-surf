@@ -91,11 +91,11 @@ function Draw-GitLog {
         # yadm covers $HOME recursively. A regular nested repository still wins.
         $headOid = yadm rev-parse HEAD 2>$null
         $headShort = yadm rev-parse --short HEAD 2>$null
-        $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always @decorationArgs 2>$null
+        $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all --date-order -n $rows --color=always @decorationArgs 2>$null
     } else {
         $headOid = git -C $Dir rev-parse HEAD 2>$null
         $headShort = git -C $Dir rev-parse --short HEAD 2>$null
-        $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all -n $rows --color=always @decorationArgs 2>$null
+        $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --all --date-order -n $rows --color=always @decorationArgs 2>$null
     }
     if (-not $lines) {
         Write-Host "(no commits)" -ForegroundColor DarkGray
