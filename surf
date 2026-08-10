@@ -400,14 +400,14 @@ _surf_configure() {
         printf '    Configuration options coming later.\n\n'
         printf '  BOTTOM PANEL\n'
         printf '    Configurable Git log\n\n'
-        _surf_config_row 0 style 'HEAD / branch style' "$style" text powerline
-        _surf_config_row 1 left-separator 'Left separator' "$left_separator" arrow none
-        _surf_config_row 2 right-separator 'Right separator' "$right_separator" arrow none
-        _surf_config_row 3 node 'Regular node' "$node" star diamond none
-        _surf_config_row 4 node 'HEAD node' "$head_node" star diamond none
-        _surf_config_row 5 date Date "$show_date" yes no
-        _surf_config_row 6 author Author "$show_author" yes no
-        _surf_config_row 7 highlight 'Highlight HEAD row' "$highlight_row" no yes
+        _surf_config_row 0 highlight 'Highlight HEAD row' "$highlight_row" no yes
+        _surf_config_row 1 style 'HEAD / branch style' "$style" text powerline
+        _surf_config_row 2 left-separator 'Left separator' "$left_separator" arrow none
+        _surf_config_row 3 right-separator 'Right separator' "$right_separator" arrow none
+        _surf_config_row 4 node 'Regular node' "$node" star diamond none
+        _surf_config_row 5 node 'HEAD node' "$head_node" star diamond none
+        _surf_config_row 6 date Date "$show_date" yes no
+        _surf_config_row 7 author Author "$show_author" yes no
         [[ -n "$status_message" ]] && printf '\n  \033[1;31m%s\033[0m\n' "$status_message"
         printf '\n  ↑/↓ select    ←/→ or Space change    Enter save defaults    q/Esc cancel\n'
 
@@ -434,14 +434,14 @@ _surf_configure() {
                 local direction=1
                 [[ "$key" == h ]] && direction=-1
                 case "$index" in
-                    0) _surf_cycle_value "$style" "$direction" text powerline; style="$REPLY" ;;
-                    1) _surf_cycle_value "$left_separator" "$direction" arrow none; left_separator="$REPLY" ;;
-                    2) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
-                    3) _surf_cycle_value "$node" "$direction" star diamond none; node="$REPLY" ;;
-                    4) _surf_cycle_value "$head_node" "$direction" star diamond none; head_node="$REPLY" ;;
-                    5) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
-                    6) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
-                    7) _surf_cycle_value "$highlight_row" "$direction" no yes; highlight_row="$REPLY" ;;
+                    0) _surf_cycle_value "$highlight_row" "$direction" no yes; highlight_row="$REPLY" ;;
+                    1) _surf_cycle_value "$style" "$direction" text powerline; style="$REPLY" ;;
+                    2) _surf_cycle_value "$left_separator" "$direction" arrow none; left_separator="$REPLY" ;;
+                    3) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
+                    4) _surf_cycle_value "$node" "$direction" star diamond none; node="$REPLY" ;;
+                    5) _surf_cycle_value "$head_node" "$direction" star diamond none; head_node="$REPLY" ;;
+                    6) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
+                    7) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
                 esac
                 _surf_apply_bottom_config "$session" custom "$style" "$left_separator" \
                     "$right_separator" "$node" "$head_node" "$show_date" "$show_author" \
