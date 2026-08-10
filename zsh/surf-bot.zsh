@@ -200,8 +200,8 @@ _surf_draw_log() {
         [[ "$ref_style" == powerline ]] || ref_style=text
         [[ "$configured_separator" == none ]] || configured_separator=arrow
         [[ "$configured_right_separator" == none ]] || configured_right_separator=arrow
-        [[ "$configured_node" == diamond ]] || configured_node=star
-        [[ "$configured_head_node" == diamond ]] || configured_head_node=star
+        [[ "$configured_node" == diamond || "$configured_node" == none ]] || configured_node=star
+        [[ "$configured_head_node" == diamond || "$configured_head_node" == none ]] || configured_head_node=star
         [[ "$show_date" == no ]] || show_date=yes
         [[ "$show_author" == no ]] || show_author=yes
         [[ "$highlight_row" == yes ]] || highlight_row=no
@@ -360,6 +360,9 @@ _surf_draw_log() {
                 [[ -n "${wide_branches[$oid]}" ]] && configured_graph_node=$'\033[1;32m◆\033[0m'
                 [[ "$is_head" == true ]] && configured_graph_node=$'\033[1;96m◆\033[0m'
                 graph="${graph/\*/$configured_graph_node}"
+            elif [[ "$theme" == custom && "$selected_node" == none ]]; then
+                graph="${graph/\* /}"
+                graph="${graph% }"
             fi
             if [[ "$theme" == custom && -n "${custom_remotes[$oid]}" ]]; then
                 local remote_name='' right_separator_text=' <- '

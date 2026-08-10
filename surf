@@ -63,10 +63,10 @@ _surf_load_config() {
                 [[ "$value" == arrow || "$value" == none ]] || continue
                 SURF_CONFIG_RIGHT_SEPARATOR="$value" ;;
             bottom.regular_node)
-                [[ "$value" == star || "$value" == diamond ]] || continue
+                [[ "$value" == star || "$value" == diamond || "$value" == none ]] || continue
                 SURF_CONFIG_REGULAR_NODE="$value" ;;
             bottom.head_node)
-                [[ "$value" == star || "$value" == diamond ]] || continue
+                [[ "$value" == star || "$value" == diamond || "$value" == none ]] || continue
                 SURF_CONFIG_HEAD_NODE="$value" ;;
             bottom.show_date)
                 [[ "$value" == yes || "$value" == no ]] || continue
@@ -348,6 +348,7 @@ _surf_configure() {
             right-separator:arrow) printf '%s' '<-' ;;
             node:star) printf '%s' '*' ;;
             node:diamond) printf '%s' '◆' ;;
+            node:none) printf '%s' none ;;
             date:yes|author:yes) printf '%s' show ;;
             date:no|author:no) printf '%s' hide ;;
             highlight:yes) printf '%s' on ;;
@@ -402,8 +403,8 @@ _surf_configure() {
         _surf_config_row 0 style 'HEAD / branch style' "$style" text powerline
         _surf_config_row 1 left-separator 'Left separator' "$left_separator" arrow none
         _surf_config_row 2 right-separator 'Right separator' "$right_separator" arrow none
-        _surf_config_row 3 node 'Regular node' "$node" star diamond
-        _surf_config_row 4 node 'HEAD node' "$head_node" star diamond
+        _surf_config_row 3 node 'Regular node' "$node" star diamond none
+        _surf_config_row 4 node 'HEAD node' "$head_node" star diamond none
         _surf_config_row 5 date Date "$show_date" yes no
         _surf_config_row 6 author Author "$show_author" yes no
         _surf_config_row 7 highlight 'Highlight HEAD row' "$highlight_row" no yes
@@ -436,8 +437,8 @@ _surf_configure() {
                     0) _surf_cycle_value "$style" "$direction" text powerline; style="$REPLY" ;;
                     1) _surf_cycle_value "$left_separator" "$direction" arrow none; left_separator="$REPLY" ;;
                     2) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
-                    3) _surf_cycle_value "$node" "$direction" star diamond; node="$REPLY" ;;
-                    4) _surf_cycle_value "$head_node" "$direction" star diamond; head_node="$REPLY" ;;
+                    3) _surf_cycle_value "$node" "$direction" star diamond none; node="$REPLY" ;;
+                    4) _surf_cycle_value "$head_node" "$direction" star diamond none; head_node="$REPLY" ;;
                     5) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
                     6) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
                     7) _surf_cycle_value "$highlight_row" "$direction" no yes; highlight_row="$REPLY" ;;
