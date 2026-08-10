@@ -125,7 +125,9 @@ _surf_render_config_signature() {
     local -a names=(
         SURF_GIT_REF_STYLE
         SURF_GIT_SEPARATOR
+        SURF_GIT_LEFT_SPACING
         SURF_GIT_RIGHT_SEPARATOR
+        SURF_GIT_RIGHT_SPACING
         SURF_GIT_NODE
         SURF_GIT_HEAD_NODE
         SURF_GIT_SHOW_DATE
@@ -151,7 +153,8 @@ _surf_draw_log() {
     local -a log_lines decoration_args
     local -A wide_branches custom_remotes
     local head_oid head_short primary_oid='' primary_name=''
-    local ref_style=text configured_separator=arrow configured_right_separator=arrow
+    local ref_style=text configured_separator=arrow configured_left_spacing=single
+    local configured_right_separator=arrow configured_right_spacing=single
     local configured_node=star configured_head_node=star
     local show_date=yes show_author=yes highlight_row=no pretty
     local separator=$'\x1f'
@@ -185,8 +188,12 @@ _surf_draw_log() {
                     | sed -n 's/^SURF_GIT_REF_STYLE=//p')
         configured_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SEPARATOR 2>/dev/null \
                                | sed -n 's/^SURF_GIT_SEPARATOR=//p')
+        configured_left_spacing=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_LEFT_SPACING 2>/dev/null \
+                                  | sed -n 's/^SURF_GIT_LEFT_SPACING=//p')
         configured_right_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_RIGHT_SEPARATOR 2>/dev/null \
                                      | sed -n 's/^SURF_GIT_RIGHT_SEPARATOR=//p')
+        configured_right_spacing=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_RIGHT_SPACING 2>/dev/null \
+                                   | sed -n 's/^SURF_GIT_RIGHT_SPACING=//p')
         configured_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_NODE 2>/dev/null \
                       | sed -n 's/^SURF_GIT_NODE=//p')
         configured_head_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HEAD_NODE 2>/dev/null \
@@ -199,7 +206,9 @@ _surf_draw_log() {
                         | sed -n 's/^SURF_GIT_HIGHLIGHT_ROW=//p')
         [[ "$ref_style" == powerline ]] || ref_style=text
         [[ "$configured_separator" == none ]] || configured_separator=arrow
+        [[ "$configured_left_spacing" == none ]] || configured_left_spacing=single
         [[ "$configured_right_separator" == none ]] || configured_right_separator=arrow
+        [[ "$configured_right_spacing" == none ]] || configured_right_spacing=single
         [[ "$configured_node" == diamond || "$configured_node" == none ]] || configured_node=star
         [[ "$configured_head_node" == diamond || "$configured_head_node" == none ]] || configured_head_node=star
         [[ "$show_date" == no ]] || show_date=yes
@@ -306,19 +315,25 @@ _surf_draw_log() {
         fi
 
         local wide_oid wide_names wide_width wide_name
+        local -i left_spacing_width=0 left_separator_width=0
+        [[ "$configured_left_spacing" == single ]] && left_spacing_width=1
+        [[ "$configured_separator" == arrow ]] && left_separator_width=2
         for wide_oid wide_names in "${(@kv)wide_branches}"; do
             wide_width=0
             if [[ "$theme" == custom && "$ref_style" == powerline ]]; then
-                local -i powerline_separator_width=1
-                [[ "$configured_separator" == none ]] && powerline_separator_width=0
-                [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 6 + powerline_separator_width ))
+                local -i powerline_separator_width=0
+                [[ "$configured_separator" == arrow ]] && powerline_separator_width=1
+                [[ "$wide_oid" == "$head_oid" ]] \
+                    && (( wide_width += 6 + powerline_separator_width + left_spacing_width ))
                 for wide_name in "${(f)wide_names}"; do
-                    (( wide_width += ${#wide_name} + 2 + powerline_separator_width ))
+                    (( wide_width += ${#wide_name} + 2 + powerline_separator_width + left_spacing_width ))
                 done
-                [[ "$configured_separator" == none ]] && (( wide_width += 1 ))
+                [[ "$configured_separator" == none && "$configured_left_spacing" == none ]] \
+                    && (( wide_width += 1 ))
             else
                 local -i separator_width=4
-                [[ "$theme" == custom && "$configured_separator" == none ]] && separator_width=1
+                [[ "$theme" == custom ]] \
+                    && separator_width=$(( left_separator_width + 2 * left_spacing_width ))
                 [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 4 + separator_width ))
                 for wide_name in "${(f)wide_names}"; do
                     (( wide_width += ${#wide_name} + separator_width ))
@@ -365,8 +380,14 @@ _surf_draw_log() {
                 graph="${graph% }"
             fi
             if [[ "$theme" == custom && -n "${custom_remotes[$oid]}" ]]; then
-                local remote_name='' right_separator_text=' <- '
-                [[ "$configured_right_separator" == none ]] && right_separator_text=' '
+                local remote_name='' right_separator_text='' right_spacer='' right_separator_glyph=''
+                [[ "$configured_right_spacing" == single ]] && right_spacer=' '
+                [[ "$configured_right_separator" == arrow ]] && right_separator_glyph='<-'
+                if [[ "$ref_style" == powerline ]]; then
+                    right_separator_text="${right_spacer}${right_separator_glyph}"
+                else
+                    right_separator_text="${right_spacer}${right_separator_glyph}${right_spacer}"
+                fi
                 for remote_name in "${(f)custom_remotes[$oid]}"; do
                     rendered+=$'\033[97m'"${right_separator_text}"$'\033[1;31m'"${remote_name}"$'\033[0m'
                 done
@@ -381,30 +402,35 @@ _surf_draw_log() {
                 if [[ "$theme" == custom && "$ref_style" == powerline ]]; then
                     local head_powerline_end=$'\033[0;36m\033[0m'
                     local branch_powerline_end=$'\033[0;32m\033[0m'
-                    local -i powerline_separator_width=1
+                    local powerline_spacing=''
+                    local -i powerline_separator_width=0
+                    [[ "$configured_left_spacing" == single ]] && powerline_spacing=' '
+                    [[ "$configured_separator" == arrow ]] && powerline_separator_width=1
                     if [[ "$configured_separator" == none ]]; then
                         head_powerline_end=$'\033[0m'
                         branch_powerline_end=$'\033[0m'
-                        powerline_separator_width=0
                     fi
                     if [[ "$is_head" == true ]]; then
-                        wide_prefix=$'\033[1;30;46m HEAD '"${head_powerline_end}"
-                        (( wide_visible += 6 + powerline_separator_width ))
+                        wide_prefix=$'\033[1;30;46m HEAD '"${head_powerline_end}${powerline_spacing}"
+                        (( wide_visible += 6 + powerline_separator_width + left_spacing_width ))
                     fi
                     for wide_branch in "${(f)wide_branches[$oid]}"; do
                         [[ -n "$wide_branch" ]] || continue
-                        wide_prefix+=$'\033[1;30;42m '"${wide_branch}"$' '"${branch_powerline_end}"
-                        (( wide_visible += ${#wide_branch} + 2 + powerline_separator_width ))
+                        wide_prefix+=$'\033[1;30;42m '"${wide_branch}"$' '"${branch_powerline_end}${powerline_spacing}"
+                        (( wide_visible += ${#wide_branch} + 2 + powerline_separator_width + left_spacing_width ))
                     done
-                    if [[ "$configured_separator" == none ]]; then
+                    if [[ "$configured_separator" == none && "$configured_left_spacing" == none ]]; then
                         wide_prefix+=' '
                         (( wide_visible += 1 ))
                     fi
                 else
                     local configured_arrow=' -> ' configured_arrow_width=4
-                    if [[ "$theme" == custom && "$configured_separator" == none ]]; then
-                        configured_arrow=' '
-                        configured_arrow_width=1
+                    if [[ "$theme" == custom ]]; then
+                        local left_spacer='' left_separator_glyph=''
+                        [[ "$configured_left_spacing" == single ]] && left_spacer=' '
+                        [[ "$configured_separator" == arrow ]] && left_separator_glyph='->'
+                        configured_arrow="${left_spacer}${left_separator_glyph}${left_spacer}"
+                        configured_arrow_width=$(( left_separator_width + 2 * left_spacing_width ))
                     fi
                     if [[ "$is_head" == true ]]; then
                         wide_prefix=$'\033[1;96mHEAD\033[0;97m'"${configured_arrow}"

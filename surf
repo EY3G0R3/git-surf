@@ -39,7 +39,9 @@ SURF_CONFIG_FILE="${SURF_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git-surf
 SURF_CONFIG_PRESENT=0
 SURF_CONFIG_REF_STYLE=text
 SURF_CONFIG_LEFT_SEPARATOR=arrow
+SURF_CONFIG_LEFT_SPACING=single
 SURF_CONFIG_RIGHT_SEPARATOR=arrow
+SURF_CONFIG_RIGHT_SPACING=single
 SURF_CONFIG_REGULAR_NODE=star
 SURF_CONFIG_HEAD_NODE=star
 SURF_CONFIG_SHOW_DATE=yes
@@ -59,9 +61,15 @@ _surf_load_config() {
             bottom.left_separator)
                 [[ "$value" == arrow || "$value" == none ]] || continue
                 SURF_CONFIG_LEFT_SEPARATOR="$value" ;;
+            bottom.left_spacing)
+                [[ "$value" == none || "$value" == single ]] || continue
+                SURF_CONFIG_LEFT_SPACING="$value" ;;
             bottom.right_separator)
                 [[ "$value" == arrow || "$value" == none ]] || continue
                 SURF_CONFIG_RIGHT_SEPARATOR="$value" ;;
+            bottom.right_spacing)
+                [[ "$value" == none || "$value" == single ]] || continue
+                SURF_CONFIG_RIGHT_SPACING="$value" ;;
             bottom.regular_node)
                 [[ "$value" == star || "$value" == diamond || "$value" == none ]] || continue
                 SURF_CONFIG_REGULAR_NODE="$value" ;;
@@ -84,9 +92,10 @@ _surf_load_config() {
 }
 
 _surf_write_config() {
-    local style="$1" left_separator="$2" right_separator="$3"
-    local regular_node="$4" head_node="$5" show_date="$6" show_author="$7"
-    local highlight_head_row="$8" config_dir temporary source_file
+    local style="$1" left_separator="$2" left_spacing="$3"
+    local right_separator="$4" right_spacing="$5" regular_node="$6"
+    local head_node="$7" show_date="$8" show_author="$9"
+    local highlight_head_row="${10}" config_dir temporary source_file
     config_dir="${SURF_CONFIG_FILE%/*}"
     [[ "$config_dir" == "$SURF_CONFIG_FILE" ]] && config_dir=.
     mkdir -p "$config_dir" || return 1
@@ -97,7 +106,9 @@ _surf_write_config() {
     if ! awk \
         -v style="$style" \
         -v left_separator="$left_separator" \
+        -v left_spacing="$left_spacing" \
         -v right_separator="$right_separator" \
+        -v right_spacing="$right_spacing" \
         -v regular_node="$regular_node" \
         -v head_node="$head_node" \
         -v show_date="$show_date" \
@@ -107,7 +118,9 @@ _surf_write_config() {
             known["version"] = 1
             known["bottom.ref_style"] = 1
             known["bottom.left_separator"] = 1
+            known["bottom.left_spacing"] = 1
             known["bottom.right_separator"] = 1
+            known["bottom.right_spacing"] = 1
             known["bottom.regular_node"] = 1
             known["bottom.head_node"] = 1
             known["bottom.show_date"] = 1
@@ -123,7 +136,9 @@ _surf_write_config() {
             print "version=1"
             print "bottom.ref_style=" style
             print "bottom.left_separator=" left_separator
+            print "bottom.left_spacing=" left_spacing
             print "bottom.right_separator=" right_separator
+            print "bottom.right_spacing=" right_spacing
             print "bottom.regular_node=" regular_node
             print "bottom.head_node=" head_node
             print "bottom.show_date=" show_date
@@ -280,12 +295,15 @@ _surf_session_value() {
 
 _surf_apply_bottom_config() {
     local session="$1" theme="$2" style="$3" left_separator="$4"
-    local right_separator="$5" node="$6" head_node="$7" show_date="$8"
-    local show_author="$9" highlight_row="${10}"
+    local left_spacing="$5" right_separator="$6" right_spacing="$7"
+    local node="$8" head_node="$9" show_date="${10}" show_author="${11}"
+    local highlight_row="${12}"
     tmux set-environment -t "$session" SURF_GIT_THEME "$theme"
     tmux set-environment -t "$session" SURF_GIT_REF_STYLE "$style"
     tmux set-environment -t "$session" SURF_GIT_SEPARATOR "$left_separator"
+    tmux set-environment -t "$session" SURF_GIT_LEFT_SPACING "$left_spacing"
     tmux set-environment -t "$session" SURF_GIT_RIGHT_SEPARATOR "$right_separator"
+    tmux set-environment -t "$session" SURF_GIT_RIGHT_SPACING "$right_spacing"
     tmux set-environment -t "$session" SURF_GIT_NODE "$node"
     tmux set-environment -t "$session" SURF_GIT_HEAD_NODE "$head_node"
     tmux set-environment -t "$session" SURF_GIT_SHOW_DATE "$show_date"
@@ -296,9 +314,10 @@ _surf_apply_bottom_config() {
 
 _surf_configure() {
     local session="$1" key rest accepted=0 status_message=''
-    local current_theme style left_separator right_separator node head_node
+    local current_theme style left_separator left_spacing right_separator right_spacing node head_node
     local show_date show_author highlight_row
-    local original_style original_left_separator original_right_separator original_node original_head_node
+    local original_style original_left_separator original_left_spacing
+    local original_right_separator original_right_spacing original_node original_head_node
     local original_show_date original_show_author
     local original_highlight_row
     local -i index=0 i
@@ -311,7 +330,9 @@ _surf_configure() {
     current_theme=$(_surf_session_value "$session" SURF_GIT_THEME "$SURF_GIT_THEME_DEFAULT")
     style=$(_surf_session_value "$session" SURF_GIT_REF_STYLE text)
     left_separator=$(_surf_session_value "$session" SURF_GIT_SEPARATOR arrow)
+    left_spacing=$(_surf_session_value "$session" SURF_GIT_LEFT_SPACING single)
     right_separator=$(_surf_session_value "$session" SURF_GIT_RIGHT_SEPARATOR arrow)
+    right_spacing=$(_surf_session_value "$session" SURF_GIT_RIGHT_SPACING single)
     node=$(_surf_session_value "$session" SURF_GIT_NODE star)
     head_node=$(_surf_session_value "$session" SURF_GIT_HEAD_NODE star)
     show_date=$(_surf_session_value "$session" SURF_GIT_SHOW_DATE yes)
@@ -319,7 +340,9 @@ _surf_configure() {
     highlight_row=$(_surf_session_value "$session" SURF_GIT_HIGHLIGHT_ROW no)
     original_style="$style"
     original_left_separator="$left_separator"
+    original_left_spacing="$left_spacing"
     original_right_separator="$right_separator"
+    original_right_spacing="$right_spacing"
     original_node="$node"
     original_head_node="$head_node"
     original_show_date="$show_date"
@@ -327,13 +350,15 @@ _surf_configure() {
     original_highlight_row="$highlight_row"
 
     _surf_apply_bottom_config "$session" custom "$style" "$left_separator" \
-        "$right_separator" "$node" "$head_node" "$show_date" "$show_author" "$highlight_row"
+        "$left_spacing" "$right_separator" "$right_spacing" "$node" "$head_node" \
+        "$show_date" "$show_author" "$highlight_row"
 
     _surf_config_cleanup() {
         if [[ "$accepted" -eq 0 ]]; then
             _surf_apply_bottom_config "$session" "$current_theme" "$original_style" \
-                "$original_left_separator" "$original_right_separator" "$original_node" \
-                "$original_head_node" "$original_show_date" "$original_show_author" \
+                "$original_left_separator" "$original_left_spacing" "$original_right_separator" \
+                "$original_right_spacing" "$original_node" "$original_head_node" \
+                "$original_show_date" "$original_show_author" \
                 "$original_highlight_row" \
                 2>/dev/null || true
         fi
@@ -403,11 +428,13 @@ _surf_configure() {
         _surf_config_row 0 highlight 'Highlight HEAD row' "$highlight_row" no yes
         _surf_config_row 1 style 'HEAD / branch style' "$style" text powerline
         _surf_config_row 2 left-separator 'Left separator' "$left_separator" arrow none
-        _surf_config_row 3 right-separator 'Right separator' "$right_separator" arrow none
-        _surf_config_row 4 node 'Regular node' "$node" star diamond none
-        _surf_config_row 5 node 'HEAD node' "$head_node" star diamond none
-        _surf_config_row 6 date Date "$show_date" yes no
-        _surf_config_row 7 author Author "$show_author" yes no
+        _surf_config_row 3 spacing 'Left spacing' "$left_spacing" none single
+        _surf_config_row 4 right-separator 'Right separator' "$right_separator" arrow none
+        _surf_config_row 5 spacing 'Right spacing' "$right_spacing" none single
+        _surf_config_row 6 node 'Regular node' "$node" star diamond none
+        _surf_config_row 7 node 'HEAD node' "$head_node" star diamond none
+        _surf_config_row 8 date Date "$show_date" yes no
+        _surf_config_row 9 author Author "$show_author" yes no
         [[ -n "$status_message" ]] && printf '\n  \033[1;31m%s\033[0m\n' "$status_message"
         printf '\n  ↑/↓ select    ←/→ or Space change    Enter save defaults    q/Esc cancel\n'
 
@@ -425,10 +452,10 @@ _surf_configure() {
         fi
         case "$key" in
             k)
-                index=$(( (index - 1 + 8) % 8 ))
+                index=$(( (index - 1 + 10) % 10 ))
                 ;;
             j)
-                index=$(( (index + 1) % 8 ))
+                index=$(( (index + 1) % 10 ))
                 ;;
             h|l|' ')
                 local direction=1
@@ -437,19 +464,22 @@ _surf_configure() {
                     0) _surf_cycle_value "$highlight_row" "$direction" no yes; highlight_row="$REPLY" ;;
                     1) _surf_cycle_value "$style" "$direction" text powerline; style="$REPLY" ;;
                     2) _surf_cycle_value "$left_separator" "$direction" arrow none; left_separator="$REPLY" ;;
-                    3) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
-                    4) _surf_cycle_value "$node" "$direction" star diamond none; node="$REPLY" ;;
-                    5) _surf_cycle_value "$head_node" "$direction" star diamond none; head_node="$REPLY" ;;
-                    6) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
-                    7) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
+                    3) _surf_cycle_value "$left_spacing" "$direction" none single; left_spacing="$REPLY" ;;
+                    4) _surf_cycle_value "$right_separator" "$direction" arrow none; right_separator="$REPLY" ;;
+                    5) _surf_cycle_value "$right_spacing" "$direction" none single; right_spacing="$REPLY" ;;
+                    6) _surf_cycle_value "$node" "$direction" star diamond none; node="$REPLY" ;;
+                    7) _surf_cycle_value "$head_node" "$direction" star diamond none; head_node="$REPLY" ;;
+                    8) _surf_cycle_value "$show_date" "$direction" yes no; show_date="$REPLY" ;;
+                    9) _surf_cycle_value "$show_author" "$direction" yes no; show_author="$REPLY" ;;
                 esac
                 _surf_apply_bottom_config "$session" custom "$style" "$left_separator" \
-                    "$right_separator" "$node" "$head_node" "$show_date" "$show_author" \
-                    "$highlight_row"
+                    "$left_spacing" "$right_separator" "$right_spacing" "$node" \
+                    "$head_node" "$show_date" "$show_author" "$highlight_row"
                 ;;
             '')
-                if _surf_write_config "$style" "$left_separator" "$right_separator" \
-                    "$node" "$head_node" "$show_date" "$show_author" "$highlight_row"; then
+                if _surf_write_config "$style" "$left_separator" "$left_spacing" \
+                    "$right_separator" "$right_spacing" "$node" "$head_node" \
+                    "$show_date" "$show_author" "$highlight_row"; then
                     accepted=1
                     break
                 fi
@@ -625,7 +655,9 @@ else
 fi
 SURF_EFFECTIVE_REF_STYLE="${SURF_GIT_REF_STYLE:-$SURF_CONFIG_REF_STYLE}"
 SURF_EFFECTIVE_LEFT_SEPARATOR="${SURF_GIT_SEPARATOR:-$SURF_CONFIG_LEFT_SEPARATOR}"
+SURF_EFFECTIVE_LEFT_SPACING="${SURF_GIT_LEFT_SPACING:-$SURF_CONFIG_LEFT_SPACING}"
 SURF_EFFECTIVE_RIGHT_SEPARATOR="${SURF_GIT_RIGHT_SEPARATOR:-$SURF_CONFIG_RIGHT_SEPARATOR}"
+SURF_EFFECTIVE_RIGHT_SPACING="${SURF_GIT_RIGHT_SPACING:-$SURF_CONFIG_RIGHT_SPACING}"
 SURF_EFFECTIVE_REGULAR_NODE="${SURF_GIT_NODE:-$SURF_CONFIG_REGULAR_NODE}"
 SURF_EFFECTIVE_HEAD_NODE="${SURF_GIT_HEAD_NODE:-$SURF_CONFIG_HEAD_NODE}"
 SURF_EFFECTIVE_SHOW_DATE="${SURF_GIT_SHOW_DATE:-$SURF_CONFIG_SHOW_DATE}"
@@ -740,7 +772,9 @@ tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_GIT_THEME "$SURF_EFFECTIVE_GIT_THEME"
 tmux set-environment -t "$SESSION" SURF_GIT_REF_STYLE "$SURF_EFFECTIVE_REF_STYLE"
 tmux set-environment -t "$SESSION" SURF_GIT_SEPARATOR "$SURF_EFFECTIVE_LEFT_SEPARATOR"
+tmux set-environment -t "$SESSION" SURF_GIT_LEFT_SPACING "$SURF_EFFECTIVE_LEFT_SPACING"
 tmux set-environment -t "$SESSION" SURF_GIT_RIGHT_SEPARATOR "$SURF_EFFECTIVE_RIGHT_SEPARATOR"
+tmux set-environment -t "$SESSION" SURF_GIT_RIGHT_SPACING "$SURF_EFFECTIVE_RIGHT_SPACING"
 tmux set-environment -t "$SESSION" SURF_GIT_NODE "$SURF_EFFECTIVE_REGULAR_NODE"
 tmux set-environment -t "$SESSION" SURF_GIT_HEAD_NODE "$SURF_EFFECTIVE_HEAD_NODE"
 tmux set-environment -t "$SESSION" SURF_GIT_SHOW_DATE "$SURF_EFFECTIVE_SHOW_DATE"

@@ -16,10 +16,13 @@ surf --configure
 ```
 
 The configuration screen previews independent bottom-panel options immediately:
-HEAD/branch label style, left and mirrored remote-ref separators, separate
-regular and HEAD node characters, date and author visibility, and full-row HEAD
-highlighting. Press Enter to save the settings as defaults and keep them in the
-current session, or `q`/Escape to restore the previous display without writing.
+HEAD/branch label style, left and mirrored remote-ref separators and spacing,
+separate regular and HEAD node characters, date and author visibility, and
+full-row HEAD highlighting. In text mode, spacing is applied on both sides of
+its separator; in powerline mode, it is applied outside the separator so labels
+can be separated without adding padding before the powerline glyph. Press Enter
+to save the settings as defaults and keep them in the current session, or
+`q`/Escape to restore the previous display without writing.
 Top- and middle-panel sections are present as placeholders for future display
 options. Each row shows every available value; use up/down to choose a setting
 and left/right to move the highlighted value.
