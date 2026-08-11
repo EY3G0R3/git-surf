@@ -315,7 +315,8 @@ function Draw-GitLog {
                         $wideVisible += 8
                     }
                     foreach ($branchName in @($wideBranches[$oid])) {
-                        $widePrefix += "`e[1;32m$branchName`e[0;97m -> "
+                        $branchColor = if ($branchName -eq $primaryName) { 96 } else { 32 }
+                        $widePrefix += "`e[1;${branchColor}m$branchName`e[0;97m -> "
                         $wideVisible += $branchName.Length + 4
                     }
                     $widePadding = " " * ($gutterWidth - $wideVisible)

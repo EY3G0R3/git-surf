@@ -449,7 +449,11 @@ _surf_draw_log() {
                     fi
                     for wide_branch in "${(f)wide_branches[$oid]}"; do
                         [[ -n "$wide_branch" ]] || continue
-                        wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
+                        if [[ "$wide_branch" == "$primary_name" ]]; then
+                            wide_prefix+=$'\033[1;96m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
+                        else
+                            wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
+                        fi
                         (( wide_visible += ${#wide_branch} + configured_arrow_width ))
                     done
                 fi
