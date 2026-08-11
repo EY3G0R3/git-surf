@@ -268,12 +268,23 @@ _surf_draw_log() {
     [[ "$theme" != custom || "$show_author" == yes ]] \
         && pretty+=' %C(bold blue)<%cl>%C(reset)'
     pretty+=' %C(auto)%D%C(reset)'
+    # Prefer topology order because it keeps short side branches compact. If
+    # that ordering would push HEAD below the pane, retry with date order so a
+    # worktree checked out in the middle of a busy history remains visible.
     log_lines=("${(@f)$("${log_cmd[@]}" \
         log "--pretty=format:${pretty}" \
-        --graph --all --date-order -n "$rows" \
+        --graph --all --topo-order -n "$rows" \
         --color=always "${decoration_args[@]}" \
         2>/dev/null)}")
     log_lines=("${log_lines[@]:0:$rows}")
+    if (( ${log_lines[(I)*${head_oid}${separator}*]} == 0 )); then
+        log_lines=("${(@f)$("${log_cmd[@]}" \
+            log "--pretty=format:${pretty}" \
+            --graph --all --date-order -n "$rows" \
+            --color=always "${decoration_args[@]}" \
+            2>/dev/null)}")
+        log_lines=("${log_lines[@]:0:$rows}")
+    fi
 
     local gutter_width=8 gutter='        '
     if [[ -n "$primary_name" ]]; then
