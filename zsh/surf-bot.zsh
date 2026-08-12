@@ -269,8 +269,9 @@ _surf_draw_log() {
         && pretty+=' %C(bold blue)<%cl>%C(reset)'
     pretty+=' %C(auto)%D%C(reset)'
     # Prefer topology order because it keeps short side branches compact. If
-    # that ordering would push HEAD below the pane, retry with date order so a
-    # worktree checked out in the middle of a busy history remains visible.
+    # that ordering would push HEAD below the pane, retry with date order. A
+    # sufficiently busy newer branch can fill both global views, so finally
+    # anchor the graph at HEAD rather than drawing a pane that omits it.
     log_lines=("${(@f)$("${log_cmd[@]}" \
         log "--pretty=format:${pretty}" \
         --graph --all --topo-order -n "$rows" \
@@ -281,6 +282,14 @@ _surf_draw_log() {
         log_lines=("${(@f)$("${log_cmd[@]}" \
             log "--pretty=format:${pretty}" \
             --graph --all --date-order -n "$rows" \
+            --color=always "${decoration_args[@]}" \
+            2>/dev/null)}")
+        log_lines=("${log_lines[@]:0:$rows}")
+    fi
+    if (( ${log_lines[(I)*${head_oid}${separator}*]} == 0 )); then
+        log_lines=("${(@f)$("${log_cmd[@]}" \
+            log "--pretty=format:${pretty}" \
+            --graph --topo-order -n "$rows" HEAD \
             --color=always "${decoration_args[@]}" \
             2>/dev/null)}")
         log_lines=("${log_lines[@]:0:$rows}")

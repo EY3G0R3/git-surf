@@ -66,8 +66,10 @@ adjacent `HEAD` and branch-name chips.
 
 The commit graph prefers topology order, which keeps short side branches close
 to their fork point. If that ordering would place `HEAD` below the visible pane,
-Surf retries with date order so a worktree checked out in the middle of a busy
-history remains visible. The fallback is selected before the pane is drawn.
+Surf retries with date order. If newer branches still fill the pane, Surf draws
+a graph anchored at `HEAD`, guaranteeing that a worktree checked out in the
+middle of busy history remains visible. The fallback is selected before the
+pane is drawn.
 
 Surf resolves the primary branch in this order:
 

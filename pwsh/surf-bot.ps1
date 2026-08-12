@@ -189,6 +189,16 @@ function Draw-GitLog {
         }
         $lines = @($lines | Select-Object -First $rows)
     }
+    # Newer branches can fill both global orderings. Anchor the last fallback
+    # at HEAD so the checked-out worktree cannot disappear from its own pane.
+    if (-not ($lines | Where-Object { $_.Contains($headMarker) })) {
+        if ($useYadm) {
+            $lines = yadm log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --topo-order -n $rows HEAD --color=always @decorationArgs 2>$null
+        } else {
+            $lines = git -C $Dir log '--pretty=format:%H%x1f%C(yellow)%h%C(reset) %C(green)%>|(25)%cr%C(reset) %s %C(bold blue)<%cl>%C(reset) %C(auto)%D%C(reset)' --graph --topo-order -n $rows HEAD --color=always @decorationArgs 2>$null
+        }
+        $lines = @($lines | Select-Object -First $rows)
+    }
 
     function Invoke-RepoGit {
         param([string[]]$Arguments)
