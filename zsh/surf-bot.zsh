@@ -151,7 +151,7 @@ _surf_draw_log() {
     local pulse="${3:-none}"
     local -a log_cmd
     local -a log_lines decoration_args
-    local -A wide_branches custom_remotes
+    local -A wide_branches custom_remotes backup_refs
     local head_oid head_short primary_oid='' primary_name=''
     local ref_style=text configured_separator=arrow configured_left_spacing=single
     local configured_right_separator=arrow configured_right_spacing=single
@@ -299,9 +299,9 @@ _surf_draw_log() {
     if [[ -n "$primary_name" ]]; then
         (( ${#primary_name} + 4 > gutter_width )) && gutter_width=$(( ${#primary_name} + 4 ))
     fi
+    local ref_line ref_oid ref_name visible_line
     if [[ "$theme" == wide || "$theme" == custom ]]; then
         gutter_width=1
-        local ref_line ref_oid ref_name visible_line
         while IFS= read -r ref_line; do
             ref_oid="${ref_line%% *}"
             ref_name="${ref_line#* }"
@@ -362,6 +362,24 @@ _surf_draw_log() {
             (( wide_width + 1 > gutter_width )) && gutter_width=$(( wide_width + 1 ))
         done
     fi
+
+    # --all traverses recovery refs, but Git's normal decorations omit their
+    # namespace. Track them separately so Surf can render a semantic marker.
+    while IFS= read -r ref_line; do
+        ref_oid="${ref_line%% *}"
+        ref_name="${ref_line#* }"
+        ref_name="${ref_name#refs/backup/}"
+        for visible_line in "${log_lines[@]}"; do
+            [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
+            if [[ -n "${backup_refs[$ref_oid]}" ]]; then
+                backup_refs[$ref_oid]+=$'\n'"${ref_name}"
+            else
+                backup_refs[$ref_oid]="$ref_name"
+            fi
+            break
+        done
+    done < <("${log_cmd[@]}" for-each-ref \
+        --format='%(objectname) %(refname)' refs/backup 2>/dev/null)
     if [[ -n "$primary_oid" && "$head_oid" == "$primary_oid" ]]; then
         if [[ "$theme" == powerline ]]; then
             gutter_width=$(( ${#primary_name} + 11 ))
@@ -410,6 +428,22 @@ _surf_draw_log() {
                 fi
                 for remote_name in "${(f)custom_remotes[$oid]}"; do
                     rendered+=$'\033[97m'"${right_separator_text}"$'\033[1;31m'"${remote_name}"$'\033[0m'
+                done
+            fi
+            if [[ -n "${backup_refs[$oid]}" ]]; then
+                local backup_name='' backup_separator=' <- '
+                if [[ "$theme" == custom ]]; then
+                    local backup_spacer='' backup_separator_glyph=''
+                    [[ "$configured_right_spacing" == single ]] && backup_spacer=' '
+                    [[ "$configured_right_separator" == arrow ]] && backup_separator_glyph='<-'
+                    if [[ "$ref_style" == powerline ]]; then
+                        backup_separator="${backup_spacer}${backup_separator_glyph}"
+                    else
+                        backup_separator="${backup_spacer}${backup_separator_glyph}${backup_spacer}"
+                    fi
+                fi
+                for backup_name in "${(f)backup_refs[$oid]}"; do
+                    rendered+=$'\033[97m'"${backup_separator}"$'\033[0;33mbackup:'"${backup_name}"$'\033[0m'
                 done
             fi
             if [[ "$is_head" == true && "$is_primary" == true ]]; then

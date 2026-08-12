@@ -205,6 +205,28 @@ function Draw-GitLog {
         if ($useYadm) { & yadm @Arguments } else { & git -C $Dir @Arguments }
     }
 
+    # --all traverses recovery refs, but Git's normal decorations omit their
+    # namespace. Track them separately so Surf can render a semantic marker.
+    $backupRefs = @{}
+    $backupRefLines = Invoke-RepoGit @("for-each-ref",
+        "--format=%(objectname) %(refname)", "refs/backup") 2>$null
+    foreach ($refLine in $backupRefLines) {
+        $spaceAt = $refLine.IndexOf(' ')
+        if ($spaceAt -lt 1) { continue }
+        $refOid = $refLine.Substring(0, $spaceAt)
+        $refName = $refLine.Substring($spaceAt + 1) -replace '^refs/backup/', ''
+        $isVisible = $false
+        foreach ($visibleLine in $lines) {
+            if ($visibleLine.Contains($refOid + [char]0x1f)) {
+                $isVisible = $true
+                break
+            }
+        }
+        if ($isVisible) {
+            $backupRefs[$refOid] = @($backupRefs[$refOid]) + $refName
+        }
+    }
+
     $wideBranches = @{}
     if ($Theme -eq "wide") {
         $localRefs = Invoke-RepoGit @("for-each-ref", "--format=%(objectname) %(refname:short)",
@@ -316,6 +338,11 @@ function Draw-GitLog {
                 }
                 $isHead = $oid -eq $headOid
                 $isPrimary = $primaryOid -and $oid -eq $primaryOid
+                if ($backupRefs.ContainsKey($oid)) {
+                    foreach ($backupName in @($backupRefs[$oid])) {
+                        $rendered += "`e[97m <- `e[0;33mbackup:$backupName`e[0m"
+                    }
+                }
                 if ($Theme -eq "wide" -and
                         ($isHead -or $wideBranches.ContainsKey($oid))) {
                     $widePrefix = ""

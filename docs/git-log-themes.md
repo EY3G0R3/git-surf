@@ -71,6 +71,11 @@ a graph anchored at `HEAD`, guaranteeing that a worktree checked out in the
 middle of busy history remains visible. The fallback is selected before the
 pane is drawn.
 
+Git includes nonstandard refs in `--all` traversal but omits them from its
+default decorations. Surf renders `refs/backup/*` as muted amber, right-side
+markers such as `← backup:pre-rewrite`, so recovery points are identified
+instead of appearing as unlabeled side histories.
+
 Surf resolves the primary branch in this order:
 
 1. The repository's `surf.primaryBranch` Git configuration.
