@@ -74,6 +74,29 @@ worktrees. Surf's own `pane-exited` hook does not catch this: it fires when the
 main pane's process exits, and closing a kitty tab kills the *client*, leaving
 the server-side panes untouched.
 
+Surf now arms tmux's session-scoped `destroy-unattached` option from a
+`client-attached` hook. Deferring it until the first attachment is important:
+enabling the option while Surf is still constructing its initially detached
+session would destroy the session immediately. After attachment, losing the
+last client destroys the complete session and its status and Git-log workers.
+Multiple simultaneous clients remain supported; the session survives until the
+last one detaches.
+
+Normal Surf startup automatically removes detached sessions created by older
+versions. A session that is concurrently being constructed already carries the
+new first-attach hook, so startup cleanup recognizes it and leaves it alone.
+The pruning commands remain available for inspection or immediate cleanup:
+
+```sh
+surf --prune
+surf --prune --force
+```
+
+Pruning identifies Surf sessions by their published `SURF_START_DIR` and
+`SURF_DIR` environment values and excludes sessions carrying the new lifecycle
+hook. Unrelated detached tmux sessions and in-progress Surf launches are left
+alone.
+
 ## The fix
 
 `surf --close <worktree-dir>` tears down both, and a workmux `pre_remove` hook

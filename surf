@@ -7,6 +7,7 @@
 #        surf --theme <name> [worktree-dir]
 #        surf --configure [worktree-dir]
 #        surf --themes
+#        surf --prune [--force]
 #        surf --help
 #   session-name  defaults to a stable per-worktree name under workmux,
 #                 otherwise a terminal-scoped name when identity is available
@@ -18,6 +19,7 @@
 #   --close       schedules teardown of the matching sessions and their kitty
 #                 tab, then exits immediately. Intended for a workmux
 #                 pre_remove hook; see docs/workmux-kitty-tab-close.md.
+#   --prune       lists detached legacy Surf sessions; --force removes them
 
 set -e
 
@@ -28,7 +30,7 @@ BORDER_BG="#282a36"       # terminal background color (used when HIDE_PANE_BORDE
 
 MODE=""
 case "${1:-}" in
-    --refresh|--close|--theme|--themes|--configure) MODE="${1#--}" ;;
+    --refresh|--close|--theme|--themes|--configure|--prune) MODE="${1#--}" ;;
     --help|-h) MODE=help ;;
 esac
 
@@ -217,6 +219,7 @@ Usage:
   surf --theme <name> [worktree-dir]
   surf --configure [worktree-dir]
   surf --themes
+  surf --prune [--force]
   surf --help
 
 Launch Surf without an option to create or attach to its tmux layout.
@@ -235,6 +238,8 @@ Options:
   --theme <name>     switch the bottom-panel Git log theme
   --configure        configure live display options and persistent defaults
   --themes           list available Git log theme names
+  --prune            list detached legacy Surf sessions; add --force to
+                     terminate them
   -h, --help         show this help and exit
 
 Configuration:
@@ -331,6 +336,43 @@ _surf_sessions_for_dir() {
         [[ "$session_dir" == "$dir" ]] || continue
         printf '%s\n' "$candidate"
     done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+}
+
+# Detached sessions created before Surf enabled destroy-unattached have no
+# client left to trigger their pane-exited hook. Identify them by Surf's own
+# session environment rather than by name so custom-named sessions are covered
+# without touching unrelated tmux sessions.
+_surf_detached_sessions() {
+    local candidate attached session_dir surf_dir lifecycle_hook
+
+    while IFS= read -r candidate; do
+        [[ -n "$candidate" ]] || continue
+        attached=$(tmux display-message -t "$candidate" -p '#{session_attached}' 2>/dev/null) \
+            || continue
+        [[ "$attached" == 0 ]] || continue
+        session_dir=$(tmux show-environment -t "$candidate" SURF_START_DIR 2>/dev/null \
+                      | sed -n 's/^SURF_START_DIR=//p')
+        surf_dir=$(tmux show-environment -t "$candidate" SURF_DIR 2>/dev/null \
+                   | sed -n 's/^SURF_DIR=//p')
+        [[ -n "$session_dir" && -n "$surf_dir" ]] || continue
+
+        # A newly created session is detached briefly while Surf builds its
+        # panes. Its first-attach hook proves that it owns the new lifecycle;
+        # leave it alone so concurrent launches cannot reap it mid-startup.
+        lifecycle_hook=$(tmux show-hooks -t "$candidate" client-attached 2>/dev/null \
+                         || true)
+        [[ "$lifecycle_hook" != *'destroy-unattached on'* ]] || continue
+        printf '%s\t%s\n' "$candidate" "$session_dir"
+    done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+}
+
+# Arm automatic teardown only after a client has attached. Enabling the option
+# while a newly constructed session is still detached destroys it immediately.
+_surf_arm_session_lifecycle() {
+    local session="$1" session_id
+    session_id=$(tmux display-message -t "$session" -p '#{session_id}')
+    tmux set-hook -t "$session" client-attached \
+        "set-option -t '$session_id' destroy-unattached on"
 }
 
 _surf_set_session_theme() {
@@ -598,6 +640,48 @@ _surf_configure() {
     trap - EXIT INT TERM
 }
 
+# Any detached Surf session without the first-attach lifecycle hook predates
+# automatic teardown. Reap those sessions before a normal launch; sessions
+# currently being constructed already carry the hook and are excluded above.
+if [[ -z "$MODE" ]]; then
+    while IFS=$'\t' read -r candidate _session_dir; do
+        [[ -n "$candidate" ]] || continue
+        tmux kill-session -t "$candidate" 2>/dev/null || true
+    done < <(_surf_detached_sessions)
+fi
+
+if [[ "$MODE" == prune ]]; then
+    PRUNE_FORCE=0
+    case "${2:-}" in
+        '') ;;
+        --force) PRUNE_FORCE=1 ;;
+        *)
+            printf 'surf: usage: surf --prune [--force]\n' >&2
+            exit 2
+            ;;
+    esac
+
+    PRUNE_COUNT=0
+    while IFS=$'\t' read -r candidate session_dir; do
+        [[ -n "$candidate" ]] || continue
+        PRUNE_COUNT=$((PRUNE_COUNT + 1))
+        if [[ "$PRUNE_FORCE" -eq 1 ]]; then
+            tmux kill-session -t "$candidate"
+            printf 'surf: removed detached session %s (%s)\n' "$candidate" "$session_dir"
+        else
+            printf 'surf: detached session %s (%s)\n' "$candidate" "$session_dir"
+        fi
+    done < <(_surf_detached_sessions)
+
+    if [[ "$PRUNE_COUNT" -eq 0 ]]; then
+        printf 'surf: no detached legacy sessions\n'
+    elif [[ "$PRUNE_FORCE" -eq 0 ]]; then
+        printf 'surf: %d detached session(s); rerun with --force to remove them\n' \
+            "$PRUNE_COUNT"
+    fi
+    exit 0
+fi
+
 DEFAULT_SESSION=$(_surf_default_session)
 if [[ -n "$MODE" ]]; then
     SESSION=$(_surf_session_for_dir "$START_DIR")
@@ -740,6 +824,10 @@ if [[ "$MODE" == close ]]; then
                        | sed -n 's/^SURF_KITTY_LISTEN=//p')
     fi
 
+    # Do not leave a polling watcher behind when there is neither a session nor
+    # a reachable kitty instance to close.
+    [[ -n "$CLOSE_SESSIONS" || -n "$CLOSE_LISTEN" ]] || exit 0
+
     # Ignoring SIGHUP and backgrounding inside a subshell that exits at once
     # orphans the watcher onto init, so it survives both the tab closing and
     # the sessions being killed. `setsid` would be tidier but is not portable
@@ -822,6 +910,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
         session_version=$(tmux show-environment -t "$SESSION" SURF_VERSION 2>/dev/null \
                           | sed 's/^SURF_VERSION=//')
         if [[ "$session_dir" == "$START_DIR" && "$session_version" == "$SURF_VERSION" ]]; then
+            _surf_arm_session_lifecycle "$SESSION"
             _surf_stamp_kitty
             exec tmux attach-session -t "$SESSION"
         fi
@@ -905,6 +994,7 @@ _surf_stamp_kitty
 # the status and log workers behind in an otherwise unusable tab.
 tmux set-hook -t "$SESSION" pane-exited \
     "if-shell -F '#{==:#{hook_pane},$MAIN_PANE}' 'kill-session -t $SESSION'"
+_surf_arm_session_lifecycle "$SESSION"
 
 # ── Bootstrap each pane by sourcing a generated script ────────────────────
 _launch_pane() {
