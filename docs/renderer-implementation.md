@@ -46,10 +46,16 @@ Run a self-updating fixed panel:
 fancylog --watch --width 72 --height 18 --color always [repository]
 ```
 
+Edit the shared display defaults:
+
+```sh
+fancylog --configure
+```
+
 Snapshot mode does not clear the screen. Watch mode clears by default and
-redraws only when refs or terminal dimensions change. Explicit width, height,
-color, clear, and polling flags make the stdout protocol usable in other
-window and panel layouts.
+redraws only when refs, configuration, or terminal dimensions change. Explicit
+width, height, color, clear, and polling flags make the stdout protocol usable
+in other window and panel layouts.
 
 ## Configuration compatibility
 
@@ -62,6 +68,9 @@ the file.
 Surf passes its live tmux environment as CLI values when the selected theme is
 `custom`, so the existing configuration TUI continues to preview changes
 without restarting the pane.
+
+`fancylog --configure` edits the same file with a keyboard-driven TUI. Running
+standalone watch processes reload the saved values automatically.
 
 ## Implementation choice
 

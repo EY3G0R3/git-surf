@@ -157,6 +157,7 @@ while true; do
         _surf_fancylog_config_signature "$cur_theme"
         cur_config_signature="$REPLY"
         if [[ "$cur_pwd" != "$last_pwd" \
+           || "$cur_refresh" != "$last_refresh" \
            || "$cur_repo_signature" != "$last_repo_signature" \
            || "$cur_config_signature" != "$last_config_signature" \
            || "$cur_dimensions" != "$last_dimensions" ]]; then
