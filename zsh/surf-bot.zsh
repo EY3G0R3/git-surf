@@ -566,8 +566,8 @@ _surf_draw_log() {
                     right_name="${collected_marker_names[$right_index]}"
                     right_kind="${collected_marker_kinds[$right_index]}"
                     case "$right_kind" in
-                        head|main|current) right_color=$'\033[1;96m' ;;
-                        local) right_color=$'\033[1;32m' ;;
+                        head|main) right_color=$'\033[1;96m' ;;
+                        current|local) right_color=$'\033[1;32m' ;;
                         *) right_color=$'\033[1;31m' ;;
                     esac
                     rendered+=$'\033[97m'"${right_separator_text}${right_color}${right_name}"$'\033[0m'
@@ -606,10 +606,10 @@ _surf_draw_log() {
                             marker_name="${collected_marker_names[$marker_index]}"
                             marker_kind="${collected_marker_kinds[$marker_index]}"
                             case "$marker_kind" in
-                                head|main|current)
+                                head|main)
                                     marker_color=$'\033[1;30;46m'
                                     marker_end=$'\033[0;36m\033[0m' ;;
-                                local)
+                                current|local)
                                     marker_color=$'\033[1;30;42m'
                                     marker_end=$'\033[0;32m\033[0m' ;;
                                 *)
@@ -634,8 +634,8 @@ _surf_draw_log() {
                             marker_name="${collected_marker_names[$marker_index]}"
                             marker_kind="${collected_marker_kinds[$marker_index]}"
                             case "$marker_kind" in
-                                head|main|current) marker_color=$'\033[1;96m' ;;
-                                local) marker_color=$'\033[1;32m' ;;
+                                head|main) marker_color=$'\033[1;96m' ;;
+                                current|local) marker_color=$'\033[1;32m' ;;
                                 *) marker_color=$'\033[1;31m' ;;
                             esac
                             marker_prefix+="${marker_color}${marker_name}"$'\033[0;97m'"${configured_arrow}"
