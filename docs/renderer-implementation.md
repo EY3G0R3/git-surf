@@ -1,93 +1,75 @@
 # Bottom-pane renderer implementation
 
-The bottom pane does not inherently require zsh. tmux gives the pane a normal
-terminal, so any long-running process that emits ANSI control sequences can
-occupy it. The launcher could source `surf-bot.zsh`, run `python3 surf-bot.py`,
-or execute a compiled `surf-bot` binary without changing the pane layout.
+Surf's bottom-pane renderer is the standalone `fancylog` application in the
+sibling `~/src/fancylog` repository. Surf retains a thin zsh adapter for tmux
+session state; the Git query, commit/ref model, layout, ANSI rendering, config
+validation, and terminal sizing belong to `fancylog`.
 
-## Current performance
-
-The zsh renderer is likely fast enough for the current workload. Most redraw
-cost comes from spawning Git and tmux commands, not from styling strings in the
-shell. Surf redraws after user activity and otherwise polls session state every
-500 ms, so renderer CPU time is not currently a demonstrated bottleneck.
-
-A rewrite should therefore be justified primarily by maintainability and
-testability, not expected rendering speed.
-
-## TODO: extract a standalone smartlog tool
-
-Separate the Git query, commit/ref model, layout, and ANSI rendering currently
-embedded in `surf-bot.zsh` into a standalone configurable command—effectively a
-Surf-flavored wrapper around `git log --graph`, or "smartlog" tool. A tentative
-name is `surf-smartlog`.
-
-The command should be useful without tmux or Kitty:
-
-```sh
-surf-smartlog [--config path] [--width columns] [repository]
-surf-smartlog --watch [repository]
-```
-
-The default mode should render one snapshot to standard output so it composes
-with ordinary terminal workflows. Watch mode should redraw on repository
-changes or an explicit refresh signal and serve as the process Surf launches in
-its bottom pane. The core renderer must not query tmux directly; a thin Surf
-adapter should translate pane dimensions and session state into command options
-or environment values.
-
-Reuse the persistent `bottom.*` configuration keys for ref styles, separators,
-nodes, metadata fields, and row highlighting. Command-line flags should override
-the config file, making the tool independently scriptable while preserving the
-same output users configured through `surf --configure`.
-
-Extraction should precede any Python or Rust rewrite. First establish the CLI
-and testable renderer boundary while behavior is still defined by the existing
-zsh implementation; the implementation language can then change without
-coupling the smartlog interface to Surf's pane orchestration.
-
-## Python
-
-Python is the preferred next implementation if the renderer outgrows zsh. It
-would provide natural commit/ref data structures, simpler ANSI-aware width and
-truncation code, and straightforward unit and snapshot tests. A persistent
-Python process would make startup cost irrelevant and could eventually replace
-the duplicated zsh and PowerShell rendering logic.
-
-The tradeoffs are a Python runtime dependency and a larger resident process.
-Windows terminal and process integration would still need explicit testing
-before replacing the PowerShell implementation.
-
-## Rust
-
-Rust could produce a fast, low-memory, self-contained executable with strong
-data modeling. It becomes attractive if Surf is distributed as a standalone
-application or needs substantially more interactive and event-driven behavior.
-
-For the current project it would add disproportionate build, packaging, and
-cross-platform release work. Visual experiments would also take longer to
-iterate on, while Git subprocesses would remain the dominant redraw cost.
-
-## Suggested migration boundary
-
-Keep the launcher and shell hooks unchanged initially. Replace only the
-long-running bottom renderer behind the existing session variables:
+## Process boundary
 
 ```text
-surf launcher
-    └── persistent renderer
-          ├── read tmux/session state
-          ├── invoke Git
-          ├── build a commit/ref model
-          ├── render the selected theme
-          └── write ANSI output to the pane
+Surf bottom pane
+    └── surf-bot.zsh (tmux adapter)
+          ├── read SURF_PWD, refresh, theme, config, and pane dimensions
+          ├── skip redraw when repository/config state is unchanged
+          └── fancylog --clear --width … --height … REPOSITORY
+                ├── query Git
+                ├── build the visible commit/ref model
+                └── write one ANSI frame to stdout
 ```
 
-Preserve `SURF_PWD`, `SURF_REFRESH`, `SURF_GIT_THEME`, and the pane/session IDs
-as the compatibility boundary. This permits an incremental Python prototype
-and side-by-side output tests without redesigning the rest of Surf.
+The renderer itself does not query tmux or Kitty. A host can run it as a
+one-shot subprocess and own refresh timing, as Surf does, or use
+`fancylog --watch` for a panel tied to a fixed repository.
 
-The display configuration UI should likewise remain renderer-independent: it
-writes session configuration, while each pane observes the settings relevant
-to it. That leaves room for top- and middle-panel options without coupling the
-UI to the current zsh renderer.
+Surf resolves the binary in this order:
+
+1. Executable path in `SURF_FANCYLOG`.
+2. `fancylog` on `PATH`.
+3. A release build in `../fancylog/target/release/fancylog`.
+4. A release build in `~/src/fancylog/target/release/fancylog`.
+
+This supports installed releases, side-by-side development, and explicit host
+configuration without coupling either repository to one filesystem layout.
+
+## Standalone and embedded use
+
+Render one composable snapshot:
+
+```sh
+fancylog [repository]
+```
+
+Run a self-updating fixed panel:
+
+```sh
+fancylog --watch --width 72 --height 18 --color always [repository]
+```
+
+Snapshot mode does not clear the screen. Watch mode clears by default and
+redraws only when refs or terminal dimensions change. Explicit width, height,
+color, clear, and polling flags make the stdout protocol usable in other
+window and panel layouts.
+
+## Configuration compatibility
+
+`fancylog` reads `${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config` and
+understands every `bottom.*` setting written by `surf --configure`. Each of the
+17 settings also has a long CLI option, such as `--head-placement`,
+`--right-separator`, `--regular-node`, and `--show-author`. CLI values override
+the file.
+
+Surf passes its live tmux environment as CLI values when the selected theme is
+`custom`, so the existing configuration TUI continues to preview changes
+without restarting the pane.
+
+## Implementation choice
+
+`fancylog` is a Rust binary with no third-party runtime dependencies. Release
+builds enable full LTO, one codegen unit, abort-on-panic, and symbol stripping.
+The native binary minimizes startup and resident memory for repeated snapshot
+embedding while keeping deployment to a single executable.
+
+Git subprocesses remain the largest rendering cost. The adapter avoids
+launching the renderer after commands that did not change refs, and watch mode
+does not redraw unchanged frames.

@@ -12,7 +12,7 @@
 param(
     [string]$Session  = "surf",
     [string]$StartDir = $PWD.Path,
-    [ValidateSet("adaptive-diamond", "pulse-arrow", "arrow", "wide", "powerline",
+    [ValidateSet("adaptive-diamond", "arrow", "wide", "powerline",
         "row-yellow", "row-cyan", "arrow-hash", "hash")]
     [string]$Theme = "adaptive-diamond",
     [switch]$ListThemes,
@@ -20,7 +20,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Themes = @("adaptive-diamond", "pulse-arrow", "arrow", "wide", "powerline",
+$Themes = @("adaptive-diamond", "arrow", "wide", "powerline",
     "row-yellow", "row-cyan", "arrow-hash", "hash")
 
 if ($ListThemes) {

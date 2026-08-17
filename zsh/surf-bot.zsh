@@ -1,102 +1,36 @@
-# surf-bot.zsh — bottom pane (30 %): live git log
-#
-# Redraws the git log whenever SURF_PWD or SURF_REFRESH changes.
-# SURF_REFRESH is bumped by the top pane after each command completes,
-# so the bottom pane only redraws on real activity — no timer-driven blink.
+# surf-bot.zsh — tmux adapter for the standalone fancylog renderer
 
-# No interactive prompt needed
 setopt no_prompt_cr
 
-_surf_truncate_ansi() {
-    local input="$1"
-    local limit="$2"
-    local output='' sequence='' char
-    local -i index=1 visible=0 length=${#input}
-
-    while (( index <= length && visible < limit )); do
-        char="${input[$index]}"
-        if [[ "$char" == $'\033' && "${input[$(( index + 1 ))]}" == '[' ]]; then
-            # Consume the CSI introducer together.  '[' is in the CSI final-byte
-            # range, so examining it in the loop below would end the sequence
-            # immediately and count its parameters (for example, "31m") as
-            # visible text.
-            sequence=$'\033['
-            (( index += 2 ))
-            while (( index <= length )); do
-                char="${input[$index]}"
-                sequence+="$char"
-                (( index += 1 ))
-                [[ "$char" == [@-~] ]] && break
-            done
-            output+="$sequence"
-            sequence=''
-            continue
-        fi
-
-        output+="$char"
-        (( visible += 1 ))
-        (( index += 1 ))
-    done
-
-    REPLY="$output"$'\033[0m'
+_surf_fancylog_value() {
+    local name="$1" fallback="$2" value
+    value=$(tmux show-environment -t "$SURF_SESSION" "$name" 2>/dev/null \
+            | sed -n "s/^${name}=//p")
+    printf '%s' "${value:-$fallback}"
 }
 
-_surf_current_head_oid() {
-    local dir="$1"
-    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
-        REPLY=$(git -C "$dir" rev-parse HEAD 2>/dev/null)
-    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
-         && (( $+commands[yadm] )) \
-         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
-        REPLY=$(yadm rev-parse HEAD 2>/dev/null)
-    else
-        REPLY=''
-    fi
-}
-
-_surf_current_primary_oid() {
-    local dir="$1"
-    local -a cmd
-    local configured primary_ref candidate oid=''
-    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
-        cmd=(git -C "$dir")
-    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
-         && (( $+commands[yadm] )) \
-         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
-        cmd=(yadm)
-    else
-        REPLY=''
+_surf_fancylog_find() {
+    local candidate
+    if [[ -n "${SURF_FANCYLOG:-}" && -x "$SURF_FANCYLOG" ]]; then
+        REPLY="$SURF_FANCYLOG"
         return
     fi
-
-    configured=$("${cmd[@]}" config --get surf.primaryBranch 2>/dev/null)
-    if [[ -n "$configured" ]]; then
-        for candidate in "refs/heads/$configured" \
-                         "refs/remotes/origin/$configured" "$configured"; do
-            oid=$("${cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
-            break
-        done
+    if (( $+commands[fancylog] )); then
+        REPLY="${commands[fancylog]}"
+        return
     fi
-    if [[ -z "$oid" ]]; then
-        primary_ref=$("${cmd[@]}" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
-        if [[ -n "$primary_ref" ]]; then
-            local name="${primary_ref#refs/remotes/origin/}"
-            oid=$("${cmd[@]}" rev-parse --verify "refs/heads/$name" 2>/dev/null) \
-                || oid=$("${cmd[@]}" rev-parse --verify "$primary_ref" 2>/dev/null) \
-                || oid=''
+    for candidate in \
+        "$SURF_DIR/../fancylog/target/release/fancylog" \
+        "$HOME/src/fancylog/target/release/fancylog"; do
+        if [[ -x "$candidate" ]]; then
+            REPLY="$candidate"
+            return
         fi
-    fi
-    if [[ -z "$oid" ]]; then
-        for candidate in refs/heads/main refs/heads/master \
-                         refs/remotes/origin/main refs/remotes/origin/master; do
-            oid=$("${cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
-            break
-        done
-    fi
-    REPLY="$oid"
+    done
+    REPLY=''
 }
 
-_surf_repo_signature() {
+_surf_fancylog_repo_signature() {
     local dir="$1"
     local -a cmd
     if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
@@ -114,14 +48,13 @@ _surf_repo_signature() {
         { "${cmd[@]}" rev-parse HEAD 2>/dev/null
           "${cmd[@]}" for-each-ref \
               --format='%(refname):%(objectname)' \
-              refs/heads refs/remotes refs/tags 2>/dev/null
+              refs/heads refs/remotes refs/tags refs/backup 2>/dev/null
         } | cksum | awk '{print $1 ":" $2}'
     )
 }
 
-_surf_render_config_signature() {
-    local theme="$1"
-    local name value signature="$theme"
+_surf_fancylog_config_signature() {
+    local theme="$1" name value signature="$theme"
     local -a names=(
         SURF_GIT_REF_STYLE
         SURF_GIT_HEAD_PLACEMENT
@@ -144,700 +77,96 @@ _surf_render_config_signature() {
 
     if [[ "$theme" == custom ]]; then
         for name in "${names[@]}"; do
-            value=$(tmux show-environment -t "$SURF_SESSION" "$name" 2>/dev/null \
-                    | sed -n "s/^${name}=//p")
+            value=$(_surf_fancylog_value "$name" '')
             signature+=$'\n'"${name}=${value}"
         done
     fi
     REPLY="$signature"
 }
 
-_surf_draw_log() {
-    setopt local_options typeset_silent
-    local dir="$1"
-    local theme="${2:-adaptive-diamond}"
-    local pulse="${3:-none}"
-    local -a log_cmd
-    local -a log_lines decoration_args
-    local -A wide_branches custom_local_refs custom_main_refs custom_current_refs
-    local -A custom_other_local_refs custom_remote_main_refs custom_remote_head_refs
-    local -A custom_other_remote_refs backup_refs
-    local head_oid head_short current_branch='' primary_oid='' primary_name=''
-    local ref_style=text configured_separator=arrow configured_left_spacing=single
-    local configured_right_separator=arrow configured_right_spacing=single
-    local head_placement=left main_placement=left current_branch_placement=left
-    local other_local_branches_placement=left remote_main_placement=right
-    local remote_head_placement=right other_remote_branches_placement=right
-    local configured_node=star configured_head_node=star
-    local show_date=yes show_author=yes highlight_row=no pretty
-    local separator=$'\x1f'
-    # Query actual pane height each draw so resizes and rounding never mismatch
-    local rows cols
-    rows=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_height}" 2>/dev/null)
-    cols=$(tmux display-message -t "$SURF_BOT_PANE" -p "#{pane_width}" 2>/dev/null)
+_surf_fancylog_draw() {
+    local dir="$1" theme="$2" rows cols
+    local -a args
+    rows=$(tmux display-message -t "$SURF_BOT_PANE" -p '#{pane_height}' 2>/dev/null)
+    cols=$(tmux display-message -t "$SURF_BOT_PANE" -p '#{pane_width}' 2>/dev/null)
     [[ -z "$rows" || "$rows" -lt 2 ]] && rows="${SURF_GIT_LINES:-10}"
     [[ -z "$cols" || "$cols" -lt 10 ]] && cols=80
-    (( rows-- ))   # leave one line at the bottom to avoid scroll
+    (( rows-- ))
 
-    # Move to top of pane, clear it
-    tput cup 0 0
-    tput ed
-
-    if git -C "$dir" rev-parse --is-inside-work-tree &>/dev/null; then
-        log_cmd=(git -C "$dir")
-    elif [[ "$dir" == "$HOME" || "$dir" == "$HOME"/* ]] \
-         && (( $+commands[yadm] )) \
-         && yadm rev-parse --is-inside-work-tree &>/dev/null; then
-        # yadm's work tree is $HOME, so every directory below it is covered.
-        # Prefer a regular repository above when one is nested in that tree.
-        log_cmd=(yadm)
-    else
-        printf '%s\n' "$(tput setaf 3)not a git repository: $dir$(tput sgr0)"
-        return
-    fi
-
+    args=(--no-config --color always --clear --theme "$theme" \
+          --width "$cols" --height "$rows")
     if [[ "$theme" == custom ]]; then
-        ref_style=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_REF_STYLE 2>/dev/null \
-                    | sed -n 's/^SURF_GIT_REF_STYLE=//p')
-        head_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HEAD_PLACEMENT 2>/dev/null \
-                         | sed -n 's/^SURF_GIT_HEAD_PLACEMENT=//p')
-        main_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_MAIN_PLACEMENT 2>/dev/null \
-                         | sed -n 's/^SURF_GIT_MAIN_PLACEMENT=//p')
-        current_branch_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_CURRENT_BRANCH_PLACEMENT 2>/dev/null \
-                                   | sed -n 's/^SURF_GIT_CURRENT_BRANCH_PLACEMENT=//p')
-        other_local_branches_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_OTHER_LOCAL_BRANCHES_PLACEMENT 2>/dev/null \
-                                         | sed -n 's/^SURF_GIT_OTHER_LOCAL_BRANCHES_PLACEMENT=//p')
-        remote_main_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_REMOTE_MAIN_PLACEMENT 2>/dev/null \
-                                | sed -n 's/^SURF_GIT_REMOTE_MAIN_PLACEMENT=//p')
-        remote_head_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_REMOTE_HEAD_PLACEMENT 2>/dev/null \
-                                | sed -n 's/^SURF_GIT_REMOTE_HEAD_PLACEMENT=//p')
-        other_remote_branches_placement=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_OTHER_REMOTE_BRANCHES_PLACEMENT 2>/dev/null \
-                                          | sed -n 's/^SURF_GIT_OTHER_REMOTE_BRANCHES_PLACEMENT=//p')
-        configured_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SEPARATOR 2>/dev/null \
-                               | sed -n 's/^SURF_GIT_SEPARATOR=//p')
-        configured_left_spacing=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_LEFT_SPACING 2>/dev/null \
-                                  | sed -n 's/^SURF_GIT_LEFT_SPACING=//p')
-        configured_right_separator=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_RIGHT_SEPARATOR 2>/dev/null \
-                                     | sed -n 's/^SURF_GIT_RIGHT_SEPARATOR=//p')
-        configured_right_spacing=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_RIGHT_SPACING 2>/dev/null \
-                                   | sed -n 's/^SURF_GIT_RIGHT_SPACING=//p')
-        configured_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_NODE 2>/dev/null \
-                      | sed -n 's/^SURF_GIT_NODE=//p')
-        configured_head_node=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HEAD_NODE 2>/dev/null \
-                               | sed -n 's/^SURF_GIT_HEAD_NODE=//p')
-        show_date=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SHOW_DATE 2>/dev/null \
-                    | sed -n 's/^SURF_GIT_SHOW_DATE=//p')
-        show_author=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_SHOW_AUTHOR 2>/dev/null \
-                      | sed -n 's/^SURF_GIT_SHOW_AUTHOR=//p')
-        highlight_row=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_HIGHLIGHT_ROW 2>/dev/null \
-                        | sed -n 's/^SURF_GIT_HIGHLIGHT_ROW=//p')
-        [[ "$ref_style" == powerline ]] || ref_style=text
-        [[ "$head_placement" == left || "$head_placement" == hidden || "$head_placement" == right ]] || head_placement=left
-        [[ "$main_placement" == left || "$main_placement" == hidden || "$main_placement" == right ]] || main_placement=left
-        [[ "$current_branch_placement" == left || "$current_branch_placement" == hidden || "$current_branch_placement" == right ]] || current_branch_placement=left
-        [[ "$other_local_branches_placement" == left || "$other_local_branches_placement" == hidden || "$other_local_branches_placement" == right ]] || other_local_branches_placement=left
-        [[ "$remote_main_placement" == left || "$remote_main_placement" == hidden || "$remote_main_placement" == right ]] || remote_main_placement=right
-        [[ "$remote_head_placement" == left || "$remote_head_placement" == hidden || "$remote_head_placement" == right ]] || remote_head_placement=right
-        [[ "$other_remote_branches_placement" == left || "$other_remote_branches_placement" == hidden || "$other_remote_branches_placement" == right ]] || other_remote_branches_placement=right
-        [[ "$configured_separator" == none ]] || configured_separator=arrow
-        [[ "$configured_left_spacing" == none ]] || configured_left_spacing=single
-        [[ "$configured_right_separator" == none ]] || configured_right_separator=arrow
-        [[ "$configured_right_spacing" == none ]] || configured_right_spacing=single
-        [[ "$configured_node" == diamond || "$configured_node" == none ]] || configured_node=star
-        [[ "$configured_head_node" == diamond || "$configured_head_node" == none ]] || configured_head_node=star
-        [[ "$show_date" == no ]] || show_date=yes
-        [[ "$show_author" == no ]] || show_author=yes
-        [[ "$highlight_row" == yes ]] || highlight_row=no
+        args+=(
+            --ref-style "$(_surf_fancylog_value SURF_GIT_REF_STYLE text)"
+            --head-placement "$(_surf_fancylog_value SURF_GIT_HEAD_PLACEMENT left)"
+            --main-placement "$(_surf_fancylog_value SURF_GIT_MAIN_PLACEMENT left)"
+            --current-branch-placement "$(_surf_fancylog_value SURF_GIT_CURRENT_BRANCH_PLACEMENT left)"
+            --other-local-branches-placement "$(_surf_fancylog_value SURF_GIT_OTHER_LOCAL_BRANCHES_PLACEMENT left)"
+            --remote-main-placement "$(_surf_fancylog_value SURF_GIT_REMOTE_MAIN_PLACEMENT right)"
+            --remote-head-placement "$(_surf_fancylog_value SURF_GIT_REMOTE_HEAD_PLACEMENT right)"
+            --other-remote-branches-placement "$(_surf_fancylog_value SURF_GIT_OTHER_REMOTE_BRANCHES_PLACEMENT right)"
+            --left-separator "$(_surf_fancylog_value SURF_GIT_SEPARATOR arrow)"
+            --left-spacing "$(_surf_fancylog_value SURF_GIT_LEFT_SPACING single)"
+            --right-separator "$(_surf_fancylog_value SURF_GIT_RIGHT_SEPARATOR arrow)"
+            --right-spacing "$(_surf_fancylog_value SURF_GIT_RIGHT_SPACING single)"
+            --regular-node "$(_surf_fancylog_value SURF_GIT_NODE star)"
+            --head-node "$(_surf_fancylog_value SURF_GIT_HEAD_NODE star)"
+            --show-date "$(_surf_fancylog_value SURF_GIT_SHOW_DATE yes)"
+            --show-author "$(_surf_fancylog_value SURF_GIT_SHOW_AUTHOR yes)"
+            --highlight-head-row "$(_surf_fancylog_value SURF_GIT_HIGHLIGHT_ROW no)"
+        )
     fi
-
-    head_oid=$("${log_cmd[@]}" rev-parse HEAD 2>/dev/null)
-    head_short=$("${log_cmd[@]}" rev-parse --short HEAD 2>/dev/null)
-    current_branch=$("${log_cmd[@]}" symbolic-ref --quiet --short HEAD 2>/dev/null) || current_branch=''
-    local configured_primary primary_ref candidate
-    configured_primary=$("${log_cmd[@]}" config --get surf.primaryBranch 2>/dev/null)
-    if [[ -n "$configured_primary" ]]; then
-        for candidate in "refs/heads/$configured_primary" \
-                         "refs/remotes/origin/$configured_primary" \
-                         "$configured_primary"; do
-            primary_oid=$("${log_cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
-            primary_name="${configured_primary#refs/heads/}"
-            primary_name="${primary_name#refs/remotes/origin/}"
-            break
-        done
-    fi
-    if [[ -z "$primary_oid" ]]; then
-        primary_ref=$("${log_cmd[@]}" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null)
-        if [[ -n "$primary_ref" ]]; then
-            primary_name="${primary_ref#refs/remotes/origin/}"
-            # origin/HEAD identifies the primary branch by name, but its
-            # remote-tracking commit may lag a local branch that is ahead.
-            # Prefer the local branch position when that branch exists.
-            primary_oid=$("${log_cmd[@]}" rev-parse --verify \
-                "refs/heads/$primary_name" 2>/dev/null) \
-                || primary_oid=$("${log_cmd[@]}" rev-parse --verify \
-                    "$primary_ref" 2>/dev/null) \
-                || primary_oid=''
-            [[ -n "$primary_oid" ]] || primary_name=''
-        fi
-    fi
-    if [[ -z "$primary_oid" ]]; then
-        for candidate in refs/heads/main refs/heads/master \
-                         refs/remotes/origin/main refs/remotes/origin/master; do
-            primary_oid=$("${log_cmd[@]}" rev-parse --verify "$candidate" 2>/dev/null) || continue
-            primary_name="${candidate##*/}"
-            break
-        done
-    fi
-
-    if [[ "$theme" == wide ]]; then
-        decoration_args=(--decorate-refs=refs/remotes --decorate-refs=refs/tags)
-    elif [[ "$theme" == custom ]]; then
-        # Remote refs are rendered separately so they can use a mirrored,
-        # independently configurable separator. Git still owns tag decoration.
-        decoration_args=(--decorate-refs=refs/tags)
-    fi
-    pretty='%H%x1f%C(yellow)%h%C(reset)'
-    [[ "$theme" != custom || "$show_date" == yes ]] \
-        && pretty+=' %C(green)%>|(25)%cr%C(reset)'
-    pretty+=' %s'
-    [[ "$theme" != custom || "$show_author" == yes ]] \
-        && pretty+=' %C(bold blue)<%cl>%C(reset)'
-    pretty+=' %C(auto)%D%C(reset)'
-    # Prefer topology order because it keeps short side branches compact. If
-    # that ordering would push HEAD below the pane, retry with date order. A
-    # sufficiently busy newer branch can fill both global views, so finally
-    # anchor the graph at HEAD rather than drawing a pane that omits it.
-    log_lines=("${(@f)$("${log_cmd[@]}" \
-        log "--pretty=format:${pretty}" \
-        --graph --all --topo-order -n "$rows" \
-        --color=always "${decoration_args[@]}" \
-        2>/dev/null)}")
-    log_lines=("${log_lines[@]:0:$rows}")
-    if (( ${log_lines[(I)*${head_oid}${separator}*]} == 0 )); then
-        log_lines=("${(@f)$("${log_cmd[@]}" \
-            log "--pretty=format:${pretty}" \
-            --graph --all --date-order -n "$rows" \
-            --color=always "${decoration_args[@]}" \
-            2>/dev/null)}")
-        log_lines=("${log_lines[@]:0:$rows}")
-    fi
-    if (( ${log_lines[(I)*${head_oid}${separator}*]} == 0 )); then
-        log_lines=("${(@f)$("${log_cmd[@]}" \
-            log "--pretty=format:${pretty}" \
-            --graph --topo-order -n "$rows" HEAD \
-            --color=always "${decoration_args[@]}" \
-            2>/dev/null)}")
-        log_lines=("${log_lines[@]:0:$rows}")
-    fi
-
-    local gutter_width=8 gutter='        '
-    if [[ -n "$primary_name" ]]; then
-        (( ${#primary_name} + 4 > gutter_width )) && gutter_width=$(( ${#primary_name} + 4 ))
-    fi
-    local ref_line ref_oid ref_name visible_line
-    if [[ "$theme" == wide || "$theme" == custom ]]; then
-        [[ "$theme" == wide ]] && gutter_width=1 || gutter_width=0
-        while IFS= read -r ref_line; do
-            ref_oid="${ref_line%% *}"
-            ref_name="${ref_line#* }"
-            for visible_line in "${log_lines[@]}"; do
-                [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
-                if [[ "$theme" == wide ]]; then
-                    if [[ -n "${wide_branches[$ref_oid]}" ]]; then
-                        wide_branches[$ref_oid]+=$'\n'"${ref_name}"
-                    else
-                        wide_branches[$ref_oid]="$ref_name"
-                    fi
-                else
-                    if [[ -n "${custom_local_refs[$ref_oid]}" ]]; then
-                        custom_local_refs[$ref_oid]+=$'\n'"${ref_name}"
-                    else
-                        custom_local_refs[$ref_oid]="$ref_name"
-                    fi
-                    if [[ -n "$primary_name" && "$ref_name" == "$primary_name" ]]; then
-                        custom_main_refs[$ref_oid]="$ref_name"
-                    elif [[ -n "$current_branch" && "$ref_name" == "$current_branch" ]]; then
-                        custom_current_refs[$ref_oid]="$ref_name"
-                    elif [[ -n "${custom_other_local_refs[$ref_oid]}" ]]; then
-                        custom_other_local_refs[$ref_oid]+=$'\n'"${ref_name}"
-                    else
-                        custom_other_local_refs[$ref_oid]="$ref_name"
-                    fi
-                fi
-                break
-            done
-        done < <("${log_cmd[@]}" for-each-ref --format='%(objectname) %(refname:short)' refs/heads 2>/dev/null)
-
-        if [[ "$theme" == custom ]]; then
-            while IFS= read -r ref_line; do
-                ref_oid="${ref_line%% *}"
-                ref_name="${ref_line#* }"
-                ref_name="${ref_name#refs/remotes/}"
-                for visible_line in "${log_lines[@]}"; do
-                    [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
-                    if [[ "${ref_name##*/}" == HEAD ]]; then
-                        if [[ -n "${custom_remote_head_refs[$ref_oid]}" ]]; then
-                            custom_remote_head_refs[$ref_oid]+=$'\n'"${ref_name}"
-                        else
-                            custom_remote_head_refs[$ref_oid]="$ref_name"
-                        fi
-                    elif [[ -n "$primary_name" && "${ref_name##*/}" == "$primary_name" ]]; then
-                        if [[ -n "${custom_remote_main_refs[$ref_oid]}" ]]; then
-                            custom_remote_main_refs[$ref_oid]+=$'\n'"${ref_name}"
-                        else
-                            custom_remote_main_refs[$ref_oid]="$ref_name"
-                        fi
-                    elif [[ -n "${custom_other_remote_refs[$ref_oid]}" ]]; then
-                        custom_other_remote_refs[$ref_oid]+=$'\n'"${ref_name}"
-                    else
-                        custom_other_remote_refs[$ref_oid]="$ref_name"
-                    fi
-                    break
-                done
-            done < <("${log_cmd[@]}" for-each-ref \
-                --format='%(objectname) %(refname)' refs/remotes 2>/dev/null)
-        fi
-
-        local wide_oid wide_names wide_width wide_name
-        local -i left_spacing_width=0 left_separator_width=0
-        [[ "$configured_left_spacing" == single ]] && left_spacing_width=1
-        [[ "$configured_separator" == arrow ]] && left_separator_width=2
-        if [[ "$theme" == wide ]]; then
-            for wide_oid wide_names in "${(@kv)wide_branches}"; do
-                wide_width=0
-                local -i separator_width=4
-                [[ "$wide_oid" == "$head_oid" ]] && (( wide_width += 4 + separator_width ))
-                for wide_name in "${(f)wide_names}"; do
-                    (( wide_width += ${#wide_name} + separator_width ))
-                done
-                (( wide_width + 1 > gutter_width )) && gutter_width=$(( wide_width + 1 ))
-            done
-        else
-            local -a collected_marker_names collected_marker_kinds
-            _surf_collect_custom_markers() {
-                local requested_placement="$1" marker_oid="$2" marker_is_head="$3" marker_name
-                collected_marker_names=()
-                collected_marker_kinds=()
-                if [[ "$marker_is_head" == true && "$head_placement" == "$requested_placement" ]]; then
-                    collected_marker_names+=(HEAD)
-                    collected_marker_kinds+=(head)
-                fi
-                if [[ "$main_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_main_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(main)
-                    done
-                fi
-                if [[ "$current_branch_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_current_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(current)
-                    done
-                fi
-                if [[ "$other_local_branches_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_other_local_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(local)
-                    done
-                fi
-                if [[ "$remote_main_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_remote_main_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(remote-main)
-                    done
-                fi
-                if [[ "$remote_head_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_remote_head_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(remote-head)
-                    done
-                fi
-                if [[ "$other_remote_branches_placement" == "$requested_placement" ]]; then
-                    for marker_name in "${(f)custom_other_remote_refs[$marker_oid]}"; do
-                        [[ -n "$marker_name" ]] || continue
-                        collected_marker_names+=("$marker_name")
-                        collected_marker_kinds+=(remote)
-                    done
-                fi
-            }
-
-            local sizing_line sizing_graph_oid sizing_oid sizing_is_head marker_name
-            local -i marker_index marker_width powerline_separator_width=0
-            [[ "$configured_separator" == arrow ]] && powerline_separator_width=1
-            for sizing_line in "${log_lines[@]}"; do
-                [[ "$sizing_line" == *"$separator"* ]] || continue
-                sizing_graph_oid="${sizing_line%%$separator*}"
-                sizing_oid="${sizing_graph_oid[-${#head_oid},-1]}"
-                sizing_is_head=false
-                [[ "$sizing_oid" == "$head_oid" ]] && sizing_is_head=true
-                _surf_collect_custom_markers left "$sizing_oid" "$sizing_is_head"
-                marker_width=0
-                for (( marker_index = 1; marker_index <= ${#collected_marker_names[@]}; marker_index++ )); do
-                    marker_name="${collected_marker_names[$marker_index]}"
-                    if [[ "$ref_style" == powerline ]]; then
-                        (( marker_width += ${#marker_name} + 2 + powerline_separator_width + left_spacing_width ))
-                    else
-                        (( marker_width += ${#marker_name} + left_separator_width + 2 * left_spacing_width ))
-                    fi
-                done
-                if [[ "$marker_width" -gt 0 && "$ref_style" == powerline \
-                      && "$configured_separator" == none \
-                      && "$configured_left_spacing" == none ]]; then
-                    (( marker_width += 1 ))
-                fi
-                (( marker_width > 0 && marker_width + 1 > gutter_width )) \
-                    && gutter_width=$(( marker_width + 1 ))
-            done
-        fi
-    fi
-
-    # --all traverses recovery refs, but Git's normal decorations omit their
-    # namespace. Track them separately so Surf can render a semantic marker.
-    while IFS= read -r ref_line; do
-        ref_oid="${ref_line%% *}"
-        ref_name="${ref_line#* }"
-        ref_name="${ref_name#refs/backup/}"
-        for visible_line in "${log_lines[@]}"; do
-            [[ "$visible_line" == *"${ref_oid}${separator}"* ]] || continue
-            if [[ -n "${backup_refs[$ref_oid]}" ]]; then
-                backup_refs[$ref_oid]+=$'\n'"${ref_name}"
-            else
-                backup_refs[$ref_oid]="$ref_name"
-            fi
-            break
-        done
-    done < <("${log_cmd[@]}" for-each-ref \
-        --format='%(objectname) %(refname)' refs/backup 2>/dev/null)
-    if [[ -n "$primary_oid" && "$head_oid" == "$primary_oid" ]]; then
-        if [[ "$theme" == powerline ]]; then
-            gutter_width=$(( ${#primary_name} + 11 ))
-        elif [[ "$theme" == wide || "$theme" == custom ]]; then
-            : # already sized from every visible local branch above
-        else
-            gutter_width=$(( ${#primary_name} + 9 ))
-        fi
-    fi
-    printf -v gutter '%*s' "$gutter_width" ''
-    [[ "$theme" == hash ]] && gutter=''
-
-    printf '%s\n' "${log_lines[@]}" | while IFS= read -r line; do
-        local is_head=false is_primary=false
-        if [[ "$line" == *"$separator"* ]]; then
-            local graph_and_oid="${line%%$separator*}"
-            local rendered="${line#*$separator}"
-            local oid="${graph_and_oid[-${#head_oid},-1]}"
-            local graph="${graph_and_oid[1,-$(( ${#head_oid} + 1 ))]}"
-            local head_node=$'\033[1;96m◆\033[0m'
-            local primary_node=$'\033[1;32m◆\033[0m'
-            local head_graph="${graph/\*/$head_node}"
-            local primary_graph="${graph/\*/$primary_node}"
-            local label=HEAD arrow=' -> '
-            [[ "$oid" == "$head_oid" ]] && is_head=true
-            [[ -n "$primary_oid" && "$oid" == "$primary_oid" ]] && is_primary=true
-            local selected_node="$configured_node"
-            [[ "$is_head" == true ]] && selected_node="$configured_head_node"
-            if [[ "$theme" == custom && "$selected_node" == diamond ]]; then
-                local configured_graph_node=$'\033[1;97m◆\033[0m'
-                [[ -n "${custom_local_refs[$oid]}" ]] && configured_graph_node=$'\033[1;32m◆\033[0m'
-                [[ "$is_head" == true ]] && configured_graph_node=$'\033[1;96m◆\033[0m'
-                graph="${graph/\*/$configured_graph_node}"
-            elif [[ "$theme" == custom && "$selected_node" == none ]]; then
-                graph="${graph/\* /}"
-                graph="${graph% }"
-            fi
-            if [[ "$theme" == custom ]]; then
-                local right_name='' right_kind='' right_color=''
-                local right_separator_text='' right_spacer='' right_separator_glyph=''
-                [[ "$configured_right_spacing" == single ]] && right_spacer=' '
-                [[ "$configured_right_separator" == arrow ]] && right_separator_glyph='<-'
-                if [[ "$ref_style" == powerline ]]; then
-                    right_separator_text="${right_spacer}${right_separator_glyph}"
-                else
-                    right_separator_text="${right_spacer}${right_separator_glyph}${right_spacer}"
-                fi
-                _surf_collect_custom_markers right "$oid" "$is_head"
-                local -i right_index
-                for (( right_index = 1; right_index <= ${#collected_marker_names[@]}; right_index++ )); do
-                    right_name="${collected_marker_names[$right_index]}"
-                    right_kind="${collected_marker_kinds[$right_index]}"
-                    case "$right_kind" in
-                        head|main) right_color=$'\033[1;96m' ;;
-                        current|local) right_color=$'\033[1;32m' ;;
-                        *) right_color=$'\033[1;31m' ;;
-                    esac
-                    rendered+=$'\033[97m'"${right_separator_text}${right_color}${right_name}"$'\033[0m'
-                done
-            fi
-            if [[ -n "${backup_refs[$oid]}" ]]; then
-                local backup_name='' backup_separator=' <- '
-                if [[ "$theme" == custom ]]; then
-                    local backup_spacer='' backup_separator_glyph=''
-                    [[ "$configured_right_spacing" == single ]] && backup_spacer=' '
-                    [[ "$configured_right_separator" == arrow ]] && backup_separator_glyph='<-'
-                    if [[ "$ref_style" == powerline ]]; then
-                        backup_separator="${backup_spacer}${backup_separator_glyph}"
-                    else
-                        backup_separator="${backup_spacer}${backup_separator_glyph}${backup_spacer}"
-                    fi
-                fi
-                for backup_name in "${(f)backup_refs[$oid]}"; do
-                    rendered+=$'\033[97m'"${backup_separator}"$'\033[0;33mbackup:'"${backup_name}"$'\033[0m'
-                done
-            fi
-            if [[ "$is_head" == true && "$is_primary" == true ]]; then
-                label="HEAD+${primary_name}"
-            fi
-
-            if [[ "$theme" == custom ]]; then
-                _surf_collect_custom_markers left "$oid" "$is_head"
-                if (( ${#collected_marker_names[@]} > 0 )); then
-                    local marker_prefix='' marker_padding='' marker_name marker_kind marker_color
-                    local marker_end marker_spacing='' configured_arrow=''
-                    local -i marker_visible=0 marker_index configured_arrow_width=0
-                    [[ "$configured_left_spacing" == single ]] && marker_spacing=' '
-                    if [[ "$ref_style" == powerline ]]; then
-                        [[ "$configured_separator" == arrow ]] && configured_arrow_width=1
-                        for (( marker_index = 1; marker_index <= ${#collected_marker_names[@]}; marker_index++ )); do
-                            marker_name="${collected_marker_names[$marker_index]}"
-                            marker_kind="${collected_marker_kinds[$marker_index]}"
-                            case "$marker_kind" in
-                                head|main)
-                                    marker_color=$'\033[1;30;46m'
-                                    marker_end=$'\033[0;36m\033[0m' ;;
-                                current|local)
-                                    marker_color=$'\033[1;30;42m'
-                                    marker_end=$'\033[0;32m\033[0m' ;;
-                                *)
-                                    marker_color=$'\033[1;30;41m'
-                                    marker_end=$'\033[0;31m\033[0m' ;;
-                            esac
-                            [[ "$configured_separator" == none ]] && marker_end=$'\033[0m'
-                            marker_prefix+="${marker_color} ${marker_name} ${marker_end}${marker_spacing}"
-                            (( marker_visible += ${#marker_name} + 2 + configured_arrow_width + left_spacing_width ))
-                        done
-                        if [[ "$configured_separator" == none \
-                              && "$configured_left_spacing" == none ]]; then
-                            marker_prefix+=' '
-                            (( marker_visible += 1 ))
-                        fi
-                    else
-                        local left_separator_glyph=''
-                        [[ "$configured_separator" == arrow ]] && left_separator_glyph='->'
-                        configured_arrow="${marker_spacing}${left_separator_glyph}${marker_spacing}"
-                        configured_arrow_width=$(( left_separator_width + 2 * left_spacing_width ))
-                        for (( marker_index = 1; marker_index <= ${#collected_marker_names[@]}; marker_index++ )); do
-                            marker_name="${collected_marker_names[$marker_index]}"
-                            marker_kind="${collected_marker_kinds[$marker_index]}"
-                            case "$marker_kind" in
-                                head|main) marker_color=$'\033[1;96m' ;;
-                                current|local) marker_color=$'\033[1;32m' ;;
-                                *) marker_color=$'\033[1;31m' ;;
-                            esac
-                            marker_prefix+="${marker_color}${marker_name}"$'\033[0;97m'"${configured_arrow}"
-                            (( marker_visible += ${#marker_name} + configured_arrow_width ))
-                        done
-                    fi
-                    printf -v marker_padding '%*s' "$(( gutter_width - marker_visible ))" ''
-                    line="${marker_padding}${marker_prefix}"$'\033[0m'"${graph}${rendered}"
-                else
-                    line="${gutter}${graph}${rendered}"
-                fi
-            elif [[ "$theme" == wide \
-                    && ( "$is_head" == true || -n "${wide_branches[$oid]}" ) ]]; then
-                local wide_prefix='' wide_visible=0 wide_branch=''
-                local configured_arrow=' -> ' configured_arrow_width=4
-                if [[ "$is_head" == true ]]; then
-                    wide_prefix=$'\033[1;96mHEAD\033[0;97m'"${configured_arrow}"
-                    (( wide_visible += 4 + configured_arrow_width ))
-                fi
-                for wide_branch in "${(f)wide_branches[$oid]}"; do
-                    [[ -n "$wide_branch" ]] || continue
-                    if [[ "$wide_branch" == "$primary_name" ]]; then
-                        wide_prefix+=$'\033[1;96m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
-                    else
-                        wide_prefix+=$'\033[1;32m'"${wide_branch}"$'\033[0;97m'"${configured_arrow}"
-                    fi
-                    (( wide_visible += ${#wide_branch} + configured_arrow_width ))
-                done
-                printf -v padding '%*s' "$(( gutter_width - wide_visible ))" ''
-                line="${padding}${wide_prefix}"$'\033[0m'"${graph}${rendered}"
-            elif [[ "$is_head" == true ]]; then
-                local plain='' padding='' cyan_reset=$'\033[0;48;5;23m'
-                local label_padding=''
-                printf -v label_padding '%*s' "$(( gutter_width - ${#label} - 4 ))" ''
-                local hash_badge=$'\033[1;97;44m'"${head_short}"$'\033[0m'
-                local styled_label=$'\033[1;96mHEAD\033[0m'
-                local pulsed_label=$'\033[1;30;46mHEAD\033[0m'
-                if [[ "$is_primary" == true ]]; then
-                    styled_label+=$'\033[97m+\033[1;32m'"${primary_name}"$'\033[0m'
-                    pulsed_label+=$'\033[97m+\033[1;32m'"${primary_name}"$'\033[0m'
-                fi
-                case "$theme" in
-                    adaptive-diamond)
-                        if [[ "$pulse" == strong ]]; then
-                            plain=$(printf '%s' "${label}${arrow}${label_padding}${graph/\*/◆}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
-                            printf -v padding '%*s' "$cols" ''
-                            line=$'\033[1;30;46m'"${plain}${padding}"
-                        elif [[ "$pulse" == subtle ]]; then
-                            line="${pulsed_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${head_graph}${rendered}"
-                        else
-                            line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${head_graph}${rendered}"
-                        fi
-                        ;;
-                    pulse-arrow)
-                        if [[ "$pulse" == strong ]]; then
-                            plain=$(printf '%s' "${label}${arrow}${label_padding}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
-                            printf -v padding '%*s' "$cols" ''
-                            line=$'\033[1;30;46m'"${plain}${padding}"
-                        else
-                            line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
-                        fi
-                        ;;
-                    arrow)
-                        line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
-                        ;;
-                    powerline)
-                        if [[ "$is_primary" == true ]]; then
-                            line=$'\033[1;30;46m HEAD \033[36;42m\033[30m '"${primary_name}"$' \033[0;32m\033[0m '"${graph}${rendered}"
-                        else
-                            line=$'\033[1;30;46m HEAD \033[0;36m\033[0m '"${label_padding}${graph}${rendered}"
-                        fi
-                        ;;
-                    row-yellow)
-                        plain=$(printf '%s' "${label}${arrow}${label_padding}${graph}${rendered}" | sed $'s/\033\\[[0-9;]*m//g')
-                        printf -v padding '%*s' "$cols" ''
-                        line=$'\033[1;30;103m'"${plain}${padding}"
-                        ;;
-                    row-cyan)
-                        line=$'\033[48;5;23m'"${styled_label}"$'\033[22;97m'"${arrow}${label_padding}${graph}${rendered}"
-                        line="${line//$'\033[0m'/$cyan_reset}"
-                        line="${line//$'\033[m'/$cyan_reset}"
-                        printf -v padding '%*s' "$cols" ''
-                        line+="$padding"
-                        ;;
-                    arrow-hash)
-                        rendered="${rendered/$head_short/$hash_badge}"
-                        line="${styled_label}"$'\033[97m'"${arrow}${label_padding}"$'\033[0m'"${graph}${rendered}"
-                        ;;
-                    hash)
-                        rendered="${rendered/$head_short/$hash_badge}"
-                        line="${graph}${rendered}"
-                        ;;
-                esac
-            elif [[ -n "$primary_oid" && "$oid" == "$primary_oid" ]]; then
-                local primary_padding=''
-                printf -v primary_padding '%*s' "$(( gutter_width - ${#primary_name} - 4 ))" ''
-                case "$theme" in
-                    hash|wide|custom) line="${graph}${rendered}" ;;
-                    powerline) line=$'\033[1;30;42m '"${primary_name}"$' \033[0;32m\033[0m '"${primary_padding}${graph}${rendered}" ;;
-                    adaptive-diamond) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${primary_graph}${rendered}" ;;
-                    *) line=$'\033[1;32m'"${primary_name}"$'\033[0;97m -> \033[0m'"${primary_padding}${graph}${rendered}" ;;
-                esac
-            else
-                line="${gutter}${graph}${rendered}"
-            fi
-        else
-            # Graph connector-only rows need the same gutter to preserve the
-            # shape and alignment of merge lines.
-            line="${gutter}${line}"
-        fi
-        if [[ "$theme" == custom && "$highlight_row" == yes \
-              && "${is_head:-false}" == true ]]; then
-            line=$'\033[48;5;23m'"${line}"
-            line=$(printf '%s' "$line" \
-                   | sed $'s/\033\\[[0-9;]*m/&\033[48;5;23m/g')
-            printf -v padding '%*s' "$cols" ''
-            line+="$padding"
-        fi
-        _surf_truncate_ansi "$line" "$cols"
-        printf '%s\n' "$REPLY"
-      done
-    [[ "$theme" == custom ]] && unfunction _surf_collect_custom_markers
+    "$FANCYLOG_BIN" "${args[@]}" -- "$dir"
 }
 
-# ── Main refresh loop ─────────────────────────────────────────────────────
-tput civis          # hide cursor in this pane
+_surf_fancylog_find
+FANCYLOG_BIN="$REPLY"
+if [[ -z "$FANCYLOG_BIN" ]]; then
+    printf '\033[H\033[2J\033[33mfancylog not found\033[0m\n'
+    printf 'Build ~/src/fancylog with: cargo build --release\n'
+    return 127
+fi
+
+tput civis
 trap 'tput cnorm; exit' INT TERM EXIT
 
 last_pwd=''
 last_refresh=''
-last_head_oid=''
-last_primary_oid=''
 last_repo_signature=''
-last_render_config_signature=''
-last_theme=''
+last_config_signature=''
+last_dimensions=''
 
 while true; do
-    tmux display-message -t "$SURF_MAIN_PANE" -p '#{pane_id}' &>/dev/null \
-        || exit
+    tmux display-message -t "$SURF_MAIN_PANE" -p '#{pane_id}' &>/dev/null || exit
 
-    # Read current working dir and refresh signal from tmux session env
-    cur_pwd=$(tmux show-environment -t "$SURF_SESSION" SURF_PWD 2>/dev/null \
-              | sed 's/^SURF_PWD=//')
-    [[ -z "$cur_pwd" ]] && cur_pwd="${SURF_START_DIR:-$HOME}"
-
-    cur_refresh=$(tmux show-environment -t "$SURF_SESSION" SURF_REFRESH 2>/dev/null \
-                  | sed 's/^SURF_REFRESH=//')
-    cur_theme=$(tmux show-environment -t "$SURF_SESSION" SURF_GIT_THEME 2>/dev/null \
-                | sed 's/^SURF_GIT_THEME=//')
-    [[ -z "$cur_theme" ]] && cur_theme=adaptive-diamond
+    cur_pwd=$(_surf_fancylog_value SURF_PWD "${SURF_START_DIR:-$HOME}")
+    cur_refresh=$(_surf_fancylog_value SURF_REFRESH '')
+    cur_theme=$(_surf_fancylog_value SURF_GIT_THEME adaptive-diamond)
     case "$cur_theme" in
-        adaptive-diamond|pulse-arrow|arrow|wide|custom|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
+        adaptive-diamond|arrow|wide|custom|powerline|row-yellow|row-cyan|arrow-hash|hash) ;;
         *) cur_theme=adaptive-diamond ;;
     esac
+    cur_dimensions=$(tmux display-message -t "$SURF_BOT_PANE" \
+                     -p '#{pane_width}x#{pane_height}' 2>/dev/null)
 
-    # A command completion is only a prompt to inspect Git state. Avoid
-    # clearing the pane when none of the displayed refs actually changed.
-    if [[ "$cur_pwd" != "$last_pwd" ]] \
-       || [[ -n "$cur_refresh" && "$cur_refresh" != "$last_refresh" ]] \
-       || [[ "$cur_theme" != "$last_theme" ]]; then
-        _surf_current_head_oid "$cur_pwd"
-        current_head_oid="$REPLY"
-        _surf_current_primary_oid "$cur_pwd"
-        current_primary_oid="$REPLY"
-        _surf_repo_signature "$cur_pwd"
-        current_repo_signature="$REPLY"
-        _surf_render_config_signature "$cur_theme"
-        current_render_config_signature="$REPLY"
-
-        should_draw=false
-        pulse=none
-        if [[ "$cur_pwd" != "$last_pwd" || "$cur_theme" != "$last_theme" \
-           || "$current_repo_signature" != "$last_repo_signature" \
-           || "$current_render_config_signature" != "$last_render_config_signature" ]]; then
-            should_draw=true
+    if [[ "$cur_pwd" != "$last_pwd" \
+       || "$cur_refresh" != "$last_refresh" \
+       || "$cur_dimensions" != "$last_dimensions" ]]; then
+        _surf_fancylog_repo_signature "$cur_pwd"
+        cur_repo_signature="$REPLY"
+        _surf_fancylog_config_signature "$cur_theme"
+        cur_config_signature="$REPLY"
+        if [[ "$cur_pwd" != "$last_pwd" \
+           || "$cur_repo_signature" != "$last_repo_signature" \
+           || "$cur_config_signature" != "$last_config_signature" \
+           || "$cur_dimensions" != "$last_dimensions" ]]; then
+            _surf_fancylog_draw "$cur_pwd" "$cur_theme"
         fi
-        # pulse-arrow is the deliberately animated alternative; unlike the
-        # adaptive default it continues to pulse after every command.
-        [[ "$cur_theme" == pulse-arrow && "$cur_refresh" != "$last_refresh" ]] \
-            && should_draw=true
-        if [[ -n "$last_repo_signature" \
-           && ( "$current_head_oid" != "$last_head_oid" \
-             || "$current_primary_oid" != "$last_primary_oid" ) ]]; then
-            case "$cur_theme" in
-                adaptive-diamond|pulse-arrow) pulse=strong; pulse_delay=0.2 ;;
-            esac
-        elif [[ "$should_draw" == true && "$cur_theme" == pulse-arrow ]]; then
-            pulse=strong; pulse_delay=0.2
-        fi
-        if [[ "$should_draw" == true && "$pulse" != none ]]; then
-            _surf_draw_log "$cur_pwd" "$cur_theme" "$pulse"
-            sleep "$pulse_delay"
-        fi
-        [[ "$should_draw" == true ]] && _surf_draw_log "$cur_pwd" "$cur_theme"
         last_pwd="$cur_pwd"
         last_refresh="$cur_refresh"
-        last_head_oid="$current_head_oid"
-        last_primary_oid="$current_primary_oid"
-        last_repo_signature="$current_repo_signature"
-        last_render_config_signature="$current_render_config_signature"
-        last_theme="$cur_theme"
+        last_repo_signature="$cur_repo_signature"
+        last_config_signature="$cur_config_signature"
+        last_dimensions="$cur_dimensions"
     fi
-
     sleep 0.5
 done

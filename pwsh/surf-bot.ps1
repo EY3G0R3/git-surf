@@ -19,27 +19,6 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
     [Console]::CursorVisible = $true
 }
 
-function Get-CurrentHeadOid {
-    param([string]$Dir)
-
-    if (git -C $Dir rev-parse --is-inside-work-tree 2>$null) {
-        return git -C $Dir rev-parse HEAD 2>$null
-    }
-    if (Get-Command yadm -ErrorAction SilentlyContinue) {
-        $homePath = [System.IO.Path]::GetFullPath($HOME).TrimEnd(
-            [System.IO.Path]::DirectorySeparatorChar,
-            [System.IO.Path]::AltDirectorySeparatorChar
-        )
-        $dirPath = [System.IO.Path]::GetFullPath($Dir)
-        if ($dirPath -eq $homePath -or $dirPath.StartsWith(
-                $homePath + [System.IO.Path]::DirectorySeparatorChar,
-                [System.StringComparison]::OrdinalIgnoreCase)) {
-            return yadm rev-parse HEAD 2>$null
-        }
-    }
-    return $null
-}
-
 function Invoke-StateGit {
     param(
         [string]$Dir,
@@ -64,42 +43,6 @@ function Invoke-StateGit {
     return $null
 }
 
-function Get-CurrentPrimaryOid {
-    param([string]$Dir)
-
-    $configured = Invoke-StateGit -Dir $Dir -Arguments @(
-        "config", "--get", "surf.primaryBranch") 2>$null
-    if ($configured) {
-        foreach ($candidate in @("refs/heads/$configured",
-                "refs/remotes/origin/$configured", $configured)) {
-            $oid = Invoke-StateGit -Dir $Dir -Arguments @(
-                "rev-parse", "--verify", $candidate) 2>$null
-            if ($oid) { return $oid }
-        }
-    }
-
-    $primaryRef = Invoke-StateGit -Dir $Dir -Arguments @(
-        "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD") 2>$null
-    if ($primaryRef) {
-        $name = $primaryRef -replace '^refs/remotes/origin/', ''
-        $oid = Invoke-StateGit -Dir $Dir -Arguments @(
-            "rev-parse", "--verify", "refs/heads/$name") 2>$null
-        if (-not $oid) {
-            $oid = Invoke-StateGit -Dir $Dir -Arguments @(
-                "rev-parse", "--verify", $primaryRef) 2>$null
-        }
-        if ($oid) { return $oid }
-    }
-
-    foreach ($candidate in @("refs/heads/main", "refs/heads/master",
-            "refs/remotes/origin/main", "refs/remotes/origin/master")) {
-        $oid = Invoke-StateGit -Dir $Dir -Arguments @(
-            "rev-parse", "--verify", $candidate) 2>$null
-        if ($oid) { return $oid }
-    }
-    return $null
-}
-
 function Get-RepoSignature {
     param([string]$Dir)
 
@@ -119,9 +62,7 @@ function Get-RepoSignature {
 function Draw-GitLog {
     param(
         [string]$Dir,
-        [string]$Theme = "adaptive-diamond",
-        [ValidateSet("None", "Strong", "Subtle")]
-        [string]$Pulse = "None"
+        [string]$Theme = "adaptive-diamond"
     )
 
     # Query actual pane size each draw so resizes are handled correctly
@@ -363,40 +304,13 @@ function Draw-GitLog {
                     $arrow = " -> "
                     $labelPadding = " " * ($gutterWidth - $label.Length - 4)
                     $styledLabel = "`e[1;96mHEAD`e[0m"
-                    $pulsedLabel = "`e[1;30;46mHEAD`e[0m"
                     if ($isPrimary) {
                         $styledLabel += "`e[97m+`e[1;32m$primaryName`e[0m"
-                        $pulsedLabel += "`e[97m+`e[1;32m$primaryName`e[0m"
                     }
                     switch ($Theme) {
                         "adaptive-diamond" {
-                            if ($Pulse -eq "Strong") {
-                                $plain = [regex]::Replace($label + $arrow + $labelPadding +
-                                    $graph.Replace('*', '◆') + $rendered,
-                                    "`e\[[0-9;]*m", "")
-                                if ($plain.Length -gt $cols) { $plain = $plain.Substring(0, $cols) }
-                                $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
-                                $sizedHead = $true
-                            } elseif ($Pulse -eq "Subtle") {
-                                $l = $pulsedLabel + "`e[97m$arrow$labelPadding`e[0m" +
-                                    $headGraph + $rendered
-                            } else {
-                                $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
-                                    $headGraph + $rendered
-                            }
-                        }
-                        "pulse-arrow" {
-                            if ($Pulse -eq "Strong") {
-                                $plain = [regex]::Replace($label + $arrow + $labelPadding +
-                                    $graph + $rendered,
-                                    "`e\[[0-9;]*m", "")
-                                if ($plain.Length -gt $cols) { $plain = $plain.Substring(0, $cols) }
-                                $l = "`e[1;30;46m" + $plain.PadRight($cols) + "`e[0m"
-                                $sizedHead = $true
-                            } else {
-                                $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
-                                    $graph + $rendered
-                            }
+                            $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
+                                $headGraph + $rendered
                         }
                         "arrow" {
                             $l = $styledLabel + "`e[97m$arrow$labelPadding`e[0m" +
@@ -472,8 +386,6 @@ function Draw-GitLog {
 
 # ── Main loop ──────────────────────────────────────────────────────────────
 $lastPwd = ""
-$lastHeadOid = ""
-$lastPrimaryOid = ""
 $lastRepoSignature = ""
 $lastTheme = ""
 
@@ -498,32 +410,11 @@ while ($true) {
         if ($needsRefresh) {
             Remove-Item $RefreshFile -Force -ErrorAction SilentlyContinue
         }
-        $currentHeadOid = Get-CurrentHeadOid -Dir $curPwd
-        $currentPrimaryOid = Get-CurrentPrimaryOid -Dir $curPwd
         $currentRepoSignature = Get-RepoSignature -Dir $curPwd
         $shouldDraw = $curPwd -ne $lastPwd -or $curTheme -ne $lastTheme -or
             $currentRepoSignature -ne $lastRepoSignature
-        if ($curTheme -eq "pulse-arrow" -and $needsRefresh) { $shouldDraw = $true }
-
-        $pulse = "None"
-        if ($lastRepoSignature -and
-                ($currentHeadOid -ne $lastHeadOid -or
-                 $currentPrimaryOid -ne $lastPrimaryOid) -and
-                $curTheme -in @("adaptive-diamond", "pulse-arrow")) {
-            $pulse = "Strong"
-            $pulseDelay = 200
-        } elseif ($shouldDraw -and $curTheme -eq "pulse-arrow") {
-            $pulse = "Strong"
-            $pulseDelay = 200
-        }
-        if ($shouldDraw -and $pulse -ne "None") {
-            Draw-GitLog -Dir $curPwd -Theme $curTheme -Pulse $pulse
-            Start-Sleep -Milliseconds $pulseDelay
-        }
         if ($shouldDraw) { Draw-GitLog -Dir $curPwd -Theme $curTheme }
         $lastPwd = $curPwd
-        $lastHeadOid = $currentHeadOid
-        $lastPrimaryOid = $currentPrimaryOid
         $lastRepoSignature = $currentRepoSignature
         $lastTheme = $curTheme
     }

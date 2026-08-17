@@ -79,8 +79,7 @@ restart the interactive shell.
 
 | Theme | HEAD treatment |
 | --- | --- |
-| `adaptive-diamond` | Strong pulse when HEAD or the primary branch moves, then `HEAD -> ◆`; unchanged commands do not redraw |
-| `pulse-arrow` | Full-row pulse on every refresh, then `HEAD -> *` |
+| `adaptive-diamond` | Static `HEAD -> ◆`; unchanged commands do not redraw |
 | `arrow` | Static `HEAD -> *` gutter |
 | `wide` | Right-aligned gutter sized for visible local branches, such as `HEAD -> main -> topic -> *` |
 | `powerline` | Padded ` HEAD ` block and matching `` pointer |

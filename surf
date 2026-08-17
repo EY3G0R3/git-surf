@@ -34,7 +34,7 @@ case "${1:-}" in
     --help|-h) MODE=help ;;
 esac
 
-SURF_GIT_THEMES=(adaptive-diamond pulse-arrow arrow wide powerline row-yellow row-cyan arrow-hash hash)
+SURF_GIT_THEMES=(adaptive-diamond arrow wide powerline row-yellow row-cyan arrow-hash hash)
 SURF_GIT_THEME_DEFAULT=adaptive-diamond
 SURF_CONFIG_FILE="${SURF_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config}"
 
