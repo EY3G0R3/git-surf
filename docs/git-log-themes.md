@@ -30,11 +30,9 @@ Each row shows every available value; use up/down to choose a setting and
 left/right to move the highlighted value.
 
 Persistent settings live in
-`${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config`. Surf validates known values
-rather than sourcing the file as shell code, preserves unknown keys when the
-TUI updates it, and writes changes atomically. New sessions use the saved
-bottom-panel configuration unless explicit `SURF_GIT_*` environment values
-override it. Named `surf --theme` changes remain session-scoped.
+`${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config`. `surf --configure`
+delegates to Fancylog's configuration screen, and the bottom pane watches the
+file for changes. Named `surf --theme` changes remain session-scoped.
 
 The marker placement keys and defaults are:
 

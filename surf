@@ -36,7 +36,7 @@ esac
 
 SURF_GIT_THEMES=(adaptive-diamond arrow wide powerline row-yellow row-cyan arrow-hash hash)
 SURF_GIT_THEME_DEFAULT=adaptive-diamond
-SURF_CONFIG_FILE="${SURF_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config}"
+SURF_CONFIG_FILE="${SURF_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config}"
 
 SURF_CONFIG_PRESENT=0
 SURF_CONFIG_REF_STYLE=text
@@ -243,7 +243,7 @@ Options:
   -h, --help         show this help and exit
 
 Configuration:
-  ${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config
+  ${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config
 HELPEOF
 }
 
@@ -741,29 +741,17 @@ if [[ "$MODE" == theme ]]; then
 fi
 
 if [[ "$MODE" == configure ]]; then
-    CONFIG_SESSION=''
-    if [[ -n "${SURF_SESSION:-}" ]] && tmux has-session -t "$SURF_SESSION" 2>/dev/null; then
-        CONFIG_SESSION="$SURF_SESSION"
+    if [[ -n "${SURF_FANCYLOG:-}" && -x "$SURF_FANCYLOG" ]]; then
+        FANCYLOG_CONFIG_BIN="$SURF_FANCYLOG"
+    elif command -v fancylog >/dev/null 2>&1; then
+        FANCYLOG_CONFIG_BIN=$(command -v fancylog)
+    elif [[ -x "$HOME/src/fancylog/target/release/fancylog" ]]; then
+        FANCYLOG_CONFIG_BIN="$HOME/src/fancylog/target/release/fancylog"
     else
-        while IFS= read -r candidate; do
-            [[ -n "$candidate" ]] || continue
-            CONFIG_SESSION="$candidate"
-            break
-        done < <(_surf_sessions_for_dir "$START_DIR")
-        if [[ -z "$CONFIG_SESSION" && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
-           && tmux has-session -t "$DEFAULT_SESSION" 2>/dev/null; then
-            CONFIG_SESSION="$DEFAULT_SESSION"
-        elif [[ -z "$CONFIG_SESSION" && -z "${2:-}" && -z "${WM_WORKTREE_PATH:-}" ]] \
-             && tmux has-session -t surf 2>/dev/null; then
-            CONFIG_SESSION=surf
-        fi
+        printf 'surf: fancylog not found; build ~/src/fancylog with cargo build --release\n' >&2
+        exit 127
     fi
-    [[ -n "$CONFIG_SESSION" ]] || {
-        printf 'surf: no matching live session for %s\n' "$START_DIR" >&2
-        exit 1
-    }
-    _surf_configure "$CONFIG_SESSION"
-    exit $?
+    exec "$FANCYLOG_CONFIG_BIN" --config "$SURF_CONFIG_FILE" --configure
 fi
 
 # Quote regex metacharacters so a path can be used as a kitty match expression.
@@ -970,6 +958,7 @@ tmux set-environment -t "$SESSION" SURF_VERSION   "$SURF_VERSION"
 tmux set-environment -t "$SESSION" SURF_GIT_LINES "$GIT_LOG_LINES"
 tmux set-environment -t "$SESSION" SURF_START_DIR  "$START_DIR"
 tmux set-environment -t "$SESSION" SURF_PWD       "$START_DIR"
+tmux set-environment -t "$SESSION" SURF_CONFIG_FILE "$SURF_CONFIG_FILE"
 tmux set-environment -t "$SESSION" SURF_GIT_THEME "$SURF_EFFECTIVE_GIT_THEME"
 tmux set-environment -t "$SESSION" SURF_GIT_REF_STYLE "$SURF_EFFECTIVE_REF_STYLE"
 tmux set-environment -t "$SESSION" SURF_GIT_HEAD_PLACEMENT "$SURF_EFFECTIVE_HEAD_PLACEMENT"

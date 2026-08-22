@@ -54,38 +54,19 @@ _surf_fancylog_repo_signature() {
 }
 
 _surf_fancylog_config_signature() {
-    local theme="$1" name value signature="$theme"
-    local -a names=(
-        SURF_GIT_REF_STYLE
-        SURF_GIT_HEAD_PLACEMENT
-        SURF_GIT_MAIN_PLACEMENT
-        SURF_GIT_CURRENT_BRANCH_PLACEMENT
-        SURF_GIT_OTHER_LOCAL_BRANCHES_PLACEMENT
-        SURF_GIT_REMOTE_MAIN_PLACEMENT
-        SURF_GIT_REMOTE_HEAD_PLACEMENT
-        SURF_GIT_OTHER_REMOTE_BRANCHES_PLACEMENT
-        SURF_GIT_SEPARATOR
-        SURF_GIT_LEFT_SPACING
-        SURF_GIT_RIGHT_SEPARATOR
-        SURF_GIT_RIGHT_SPACING
-        SURF_GIT_NODE
-        SURF_GIT_HEAD_NODE
-        SURF_GIT_SHOW_DATE
-        SURF_GIT_SHOW_AUTHOR
-        SURF_GIT_HIGHLIGHT_ROW
-    )
-
-    if [[ "$theme" == custom ]]; then
-        for name in "${names[@]}"; do
-            value=$(_surf_fancylog_value "$name" '')
-            signature+=$'\n'"${name}=${value}"
-        done
+    local theme="$1" config_file signature
+    config_file=$(_surf_fancylog_value SURF_CONFIG_FILE \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config")
+    if [[ -f "$config_file" ]]; then
+        signature=$(cksum < "$config_file")
+    else
+        signature=missing
     fi
-    REPLY="$signature"
+    REPLY="$theme:$signature"
 }
 
 _surf_fancylog_draw() {
-    local dir="$1" theme="$2" rows cols
+    local dir="$1" theme="$2" rows cols config_file
     local -a args
     rows=$(tmux display-message -t "$SURF_BOT_PANE" -p '#{pane_height}' 2>/dev/null)
     cols=$(tmux display-message -t "$SURF_BOT_PANE" -p '#{pane_width}' 2>/dev/null)
@@ -93,29 +74,10 @@ _surf_fancylog_draw() {
     [[ -z "$cols" || "$cols" -lt 10 ]] && cols=80
     (( rows-- ))
 
-    args=(--no-config --color always --clear --theme "$theme" \
+    config_file=$(_surf_fancylog_value SURF_CONFIG_FILE \
+        "${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config")
+    args=(--config "$config_file" --color always --clear --theme "$theme" \
           --width "$cols" --height "$rows")
-    if [[ "$theme" == custom ]]; then
-        args+=(
-            --ref-style "$(_surf_fancylog_value SURF_GIT_REF_STYLE text)"
-            --head-placement "$(_surf_fancylog_value SURF_GIT_HEAD_PLACEMENT left)"
-            --main-placement "$(_surf_fancylog_value SURF_GIT_MAIN_PLACEMENT left)"
-            --current-branch-placement "$(_surf_fancylog_value SURF_GIT_CURRENT_BRANCH_PLACEMENT left)"
-            --other-local-branches-placement "$(_surf_fancylog_value SURF_GIT_OTHER_LOCAL_BRANCHES_PLACEMENT left)"
-            --remote-main-placement "$(_surf_fancylog_value SURF_GIT_REMOTE_MAIN_PLACEMENT right)"
-            --remote-head-placement "$(_surf_fancylog_value SURF_GIT_REMOTE_HEAD_PLACEMENT right)"
-            --other-remote-branches-placement "$(_surf_fancylog_value SURF_GIT_OTHER_REMOTE_BRANCHES_PLACEMENT right)"
-            --left-separator "$(_surf_fancylog_value SURF_GIT_SEPARATOR arrow)"
-            --left-spacing "$(_surf_fancylog_value SURF_GIT_LEFT_SPACING single)"
-            --right-separator "$(_surf_fancylog_value SURF_GIT_RIGHT_SEPARATOR arrow)"
-            --right-spacing "$(_surf_fancylog_value SURF_GIT_RIGHT_SPACING single)"
-            --regular-node "$(_surf_fancylog_value SURF_GIT_NODE star)"
-            --head-node "$(_surf_fancylog_value SURF_GIT_HEAD_NODE star)"
-            --show-date "$(_surf_fancylog_value SURF_GIT_SHOW_DATE yes)"
-            --show-author "$(_surf_fancylog_value SURF_GIT_SHOW_AUTHOR yes)"
-            --highlight-head-row "$(_surf_fancylog_value SURF_GIT_HIGHLIGHT_ROW no)"
-        )
-    fi
     "$FANCYLOG_BIN" "${args[@]}" -- "$dir"
 }
 
@@ -148,14 +110,15 @@ while true; do
     esac
     cur_dimensions=$(tmux display-message -t "$SURF_BOT_PANE" \
                      -p '#{pane_width}x#{pane_height}' 2>/dev/null)
+    _surf_fancylog_config_signature "$cur_theme"
+    cur_config_signature="$REPLY"
 
     if [[ "$cur_pwd" != "$last_pwd" \
        || "$cur_refresh" != "$last_refresh" \
+       || "$cur_config_signature" != "$last_config_signature" \
        || "$cur_dimensions" != "$last_dimensions" ]]; then
         _surf_fancylog_repo_signature "$cur_pwd"
         cur_repo_signature="$REPLY"
-        _surf_fancylog_config_signature "$cur_theme"
-        cur_config_signature="$REPLY"
         if [[ "$cur_pwd" != "$last_pwd" \
            || "$cur_refresh" != "$last_refresh" \
            || "$cur_repo_signature" != "$last_repo_signature" \

@@ -10,7 +10,7 @@ validation, and terminal sizing belong to `fancylog`.
 ```text
 Surf bottom pane
     └── surf-bot.zsh (tmux adapter)
-          ├── read SURF_PWD, refresh, theme, config, and pane dimensions
+          ├── read SURF_PWD, refresh, theme, config file, and pane dimensions
           ├── skip redraw when repository/config state is unchanged
           └── fancylog --clear --width … --height … REPOSITORY
                 ├── query Git
@@ -57,20 +57,16 @@ redraws only when refs, configuration, or terminal dimensions change. Explicit
 width, height, color, clear, and polling flags make the stdout protocol usable
 in other window and panel layouts.
 
-## Configuration compatibility
+## Configuration ownership
 
-`fancylog` reads `${XDG_CONFIG_HOME:-$HOME/.config}/git-surf/config` and
-understands every `bottom.*` setting written by `surf --configure`. Each of the
-17 settings also has a long CLI option, such as `--head-placement`,
-`--right-separator`, `--regular-node`, and `--show-author`. CLI values override
-the file.
+`fancylog` owns `${XDG_CONFIG_HOME:-$HOME/.config}/fancylog/config`. Surf passes
+that path to the renderer and watches its checksum so saved changes redraw a
+live pane. Each setting also has a long CLI option, such as `--head-placement`,
+`--right-separator`, `--regular-node`, and `--show-author`.
 
-Surf passes its live tmux environment as CLI values when the selected theme is
-`custom`, so the existing configuration TUI continues to preview changes
-without restarting the pane.
-
-`fancylog --configure` edits the same file with a keyboard-driven TUI. Running
-standalone watch processes reload the saved values automatically.
+`surf --configure` delegates to `fancylog --configure`, so Surf and standalone
+watch processes edit and reload the same settings without duplicating config
+parsing in the pane adapter.
 
 ## Implementation choice
 
